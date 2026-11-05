@@ -541,3 +541,27 @@ def test_text_body_starting_like_yenc(scripted_server: Start) -> None:
     reply = b"222 0 <a@b> body\r\n=ybeginners guide\r\ntext\r\n.\r\n"
     client = _body_server(scripted_server, reply)
     assert client.body("<a@b>") == b"=ybeginners guide\r\ntext\r\n"
+
+
+@pytest.mark.parametrize(
+    ("verb", "call"),
+    [
+        ("ARTICLE", lambda c: c.article("<a@b>")),
+        ("HEAD", lambda c: c.head("<a@b>")),
+        ("BODY", lambda c: c.body("<a@b>")),
+    ],
+)
+def test_article_commands_unexpected_multiline_code(
+    scripted_server: Start, verb: str, call: Callable[[nntp.NNTPClient], object]
+) -> None:
+    """A wrong multi-line success code is drained before raising (I2)."""
+    wrong = (
+        b"224 overview\r\n1\tsubject\r\n.\r\n"
+        if verb != "HEAD"
+        else (b"222 0 <a@b> body\r\nbody\r\n.\r\n")
+    )
+    server = scripted_server({verb: wrong, "DATE": DATE})
+    client = server.client()
+    with pytest.raises(nntp.NNTPReplyError):
+        call(client)
+    assert client.date() == DATE_VALUE
