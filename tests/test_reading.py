@@ -599,3 +599,26 @@ def test_info_close_after_first_line(scripted_server: Start) -> None:
     assert next(reply) == "one\r\n"
     reply.close()  # type: ignore[attr-defined]
     assert client.date() == DATE_VALUE
+
+
+def test_read_timeout(scripted_server: Start) -> None:
+    """A read timeout is an NNTPTimeoutError (also a TimeoutError); the
+    connection is closed, since the late reply would desync the next command."""
+    server = scripted_server({"DATE": [1.0, DATE]})
+    client = server.client(timeout=1)
+    client.socket.settimeout(0.1)
+    with pytest.raises(nntp.NNTPTimeoutError) as info:
+        client.date()
+    assert isinstance(info.value, TimeoutError)
+    assert client.socket.fileno() == -1
+    with pytest.raises(nntp.NNTPError, match="closed"):
+        client.date()
+
+
+def test_read_timeout_inside_reply(scripted_server: Start) -> None:
+    server = scripted_server({"HELP": [b"100 help\r\none\r\n", 1.0, b".\r\n"]})
+    client = server.client(timeout=1)
+    client.socket.settimeout(0.1)
+    with pytest.raises(nntp.NNTPTimeoutError):
+        client.help()
+    assert client.socket.fileno() == -1
