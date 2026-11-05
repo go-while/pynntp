@@ -23,7 +23,7 @@ before it was merged. The merge commits are in `git log --first-parent develop-0
 | Bug 8: CR/LF injection in headers | fixed | 7f1ea38 |
 | Bug 8: CR/LF injection in command arguments | open (B5) | |
 | Bugs 9, 10: POST truncation, Message-ID from 240 | fixed | ee9af71 |
-| Bug 11: AUTHINFO | in review (B4) | |
+| Bug 11: AUTHINFO: no recursion, no bare AUTHINFO USER, no MODE READER after auth, 483 passed through, explicit `login()` | fixed | 49de4af |
 | Bug 12: XHDR values and message-id form | fixed | 3fd109e |
 | Bug 13: socket leaks on failed setup | fixed | c08d9b0 |
 | Low: yEnc size/CRC check, text after `=yend` | fixed | b4b2208, 9ab7270 |
