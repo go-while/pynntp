@@ -565,3 +565,16 @@ def test_article_commands_unexpected_multiline_code(
     with pytest.raises(nntp.NNTPReplyError):
         call(client)
     assert client.date() == DATE_VALUE
+
+
+@pytest.mark.parametrize(
+    "line", [b"\r\n", b"hello\r\n", b"99 too low\r\n", b"6000 x\r\n"]
+)
+def test_invalid_status_line(scripted_server: Start, line: bytes) -> None:
+    """NNTPProtocolError carries a str message, also for an empty line."""
+    server = scripted_server({"DATE": line})
+    client = server.client()
+    with pytest.raises(nntp.NNTPProtocolError) as info:
+        client.date()
+    assert isinstance(info.value.args[0], str)
+    assert info.value.args[0].startswith("Invalid status line")

@@ -328,14 +328,15 @@ class BaseNNTPClient:
         """
         line = next(self._line()).rstrip()
         parts = line.split(None, 1)
+        text = line.decode(self.encoding, self.errors)
 
         try:
             code, data = int(parts[0]), b""
-        except ValueError:
-            raise NNTPProtocolError(line)
+        except (IndexError, ValueError):
+            raise NNTPProtocolError(f"Invalid status line: {text!r}")
 
         if code < 100 or code >= 600:
-            raise NNTPProtocolError(line)
+            raise NNTPProtocolError(f"Invalid status line: {text!r}")
 
         if len(parts) > 1:
             data = parts[1]
