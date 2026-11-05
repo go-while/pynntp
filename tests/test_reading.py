@@ -351,3 +351,49 @@ def test_unexpected_multiline_code_is_drained(scripted_server: Start) -> None:
     assert isinstance(error, nntp.NNTPReplyError)
     assert error.code == 221
     assert client.date() == DATE_VALUE
+
+
+def test_reply_registered_before_first_read(scripted_server: Start) -> None:
+    """A reply returned but not yet iterated still blocks (review: terra)."""
+    server = scripted_server({"LIST": ACTIVE, "DATE": DATE})
+    client = server.client()
+    reply = client.list()
+    with pytest.raises(nntp.nntp.NNTPSyncError):
+        client.date()
+    del reply
+    assert client.date() == DATE_VALUE
+
+
+def test_reply_returned_and_dropped(scripted_server: Start) -> None:
+    server = scripted_server({"LIST": ACTIVE, "DATE": DATE})
+    client = server.client()
+    client.list()
+    assert client.date() == DATE_VALUE
+
+
+def _corrupt_gzip_list() -> list[bytes | float]:
+    blob = bytearray(gzip.compress(b"alpha\r\nbeta\r\n", mtime=0))
+    blob[-8] ^= 1  # break the CRC in the gzip trailer
+    return [_gzip_list(bytes(blob[:-8])), 0.05, bytes(blob[-8:]), 0.05, b".\r\n"]
+
+
+def test_gzip_corrupt_abandoned_closes(scripted_server: Start) -> None:
+    """Corrupt gzip: the reply's end is unknown, so the connection is closed.
+
+    Review: sol. Before, the next command read the rest of the bad reply.
+    """
+    server = scripted_server({"LIST": _corrupt_gzip_list(), "DATE": DATE})
+    client = server.client()
+    assert next(client.list()) == "alpha\r\n"
+    with pytest.raises(nntp.NNTPDataError, match="connection closed"):
+        client.date()
+    assert client.socket.fileno() == -1
+    assert "DATE" not in server.received
+
+
+def test_gzip_corrupt_read_closes(scripted_server: Start) -> None:
+    server = scripted_server({"LIST": _corrupt_gzip_list(), "DATE": DATE})
+    client = server.client()
+    with pytest.raises(nntp.NNTPDataError, match="connection closed"):
+        list(client.list())
+    assert client.socket.fileno() == -1

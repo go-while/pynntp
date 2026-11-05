@@ -384,7 +384,7 @@ class BaseNNTPClient:
                 # the terminator follows the compressed data
                 buf.write(data)
             else:
-                buf.write(_inflate(inflate, data))
+                buf.write(self._inflate_or_close(inflate, data))
                 if inflate.eof:
                     # whatever came after the end of the gzip stream, once
                     buf.write(inflate.unused_data)
@@ -405,13 +405,25 @@ class BaseNNTPClient:
             # for the next reply. Whatever follows the stream is that reply.
             buf.clear()
             while not inflate.eof:
-                _inflate(inflate, next(self._buf()))
+                self._inflate_or_close(inflate, next(self._buf()))
             rest = inflate.unused_data
         if rest:
             buffer = BytesFifo()
             buffer.write(rest)
             buffer.write(self._buffer.read())
             self._buffer = buffer
+
+    def _inflate_or_close(self, inflate: zlib._Decompress, data: bytes) -> bytes:
+        """Decompress part of a gzip reply; close the connection if corrupt.
+
+        The end of a corrupt compressed reply can't be found, so the
+        connection can't be used for further commands.
+        """
+        try:
+            return _inflate(inflate, data)
+        except NNTPDataError:
+            self.socket.close()
+            raise NNTPDataError("Decompression failed, connection closed")
 
     def _info_yenczlib(self) -> Iterator[bytes]:
         """Generator for the lines of a compressed info (textual) response.
@@ -512,7 +524,11 @@ class BaseNNTPClient:
             for _ in source:
                 pass
         except NNTPDataError:
-            pass  # bad data (e.g. a yEnc CRC), but the reply was read to its end
+            # Bad data (e.g. a yEnc CRC) after the reply was read to its end
+            # is not the next command's business. If the end couldn't be
+            # found, the connection was closed: say so.
+            if self.socket.fileno() == -1:
+                raise
         finally:
             self._end_reply(source)
 
@@ -568,10 +584,12 @@ class BaseNNTPClient:
             message: The status message for the command response.
             yz: Use yenzlib decompression. Useful for xz* commands.
 
-        Yields:
-            A line of the info response as a string.
+        Returns:
+            An iterator over the lines of the info response as strings. The
+            reply counts as being read from the moment info() returns until
+            the iterator is exhausted or dropped.
         """
-        yield from self._decode(self._info(code, message, yz))
+        return self._decode(self._info(code, message, yz))
 
     def _decode(self, lines: Iterable[bytes]) -> Iterator[str]:
         """Decode lines of bytes to str."""
