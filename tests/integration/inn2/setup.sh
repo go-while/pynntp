@@ -43,11 +43,16 @@ esac
 # Containers (LXC) report the whole host's load average, so nnrpd's load
 # limit (16 by default) refuses readers when neighbours are busy: "400 load
 # at 18.87, try later" on the test hosts. No limit on a disposable test host.
-if grep -q '^nnrpdloadlimit:' $ETC/inn.conf; then
-    sed -i 's/^nnrpdloadlimit:.*/nnrpdloadlimit: 0/' $ETC/inn.conf
-else
-    echo 'nnrpdloadlimit: 0' >> $ETC/inn.conf
-fi
+# innwatch throttles innd itself for the same reason ("loadav
+# [innwatch:hiload] 2318 gt 2000"); the restart below lifts a throttle.
+for kv in "nnrpdloadlimit: 0" "doinnwatch: false"; do
+    key=${kv%%:*}
+    if grep -q "^$key:" $ETC/inn.conf; then
+        sed -i "s/^$key:.*/$kv/" $ETC/inn.conf
+    else
+        echo "$kv" >> $ETC/inn.conf
+    fi
+done
 
 # localhost must not be a feeding peer; otherwise innd answers it.
 if grep -q '^peer ME' $ETC/incoming.conf; then
