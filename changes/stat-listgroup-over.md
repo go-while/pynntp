@@ -1,0 +1,2 @@
+Added: `stat()` returns an article number and Message-ID without downloading its text; `listgroup()` selects a group and yields its article numbers, optionally limited by a range (which requires a group name).
+Added: `over()` provides RFC 3977 overview retrieval, including optional server-supported Message-ID lookup, using the same normalized fields as XOVER/XZVER. Existing XOVER/XZVER signatures are unchanged.
