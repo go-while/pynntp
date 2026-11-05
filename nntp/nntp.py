@@ -219,19 +219,23 @@ class BaseNNTPClient:
 
         # connect
         self.socket = socket.create_connection((host, port), timeout=timeout)
-        if use_ssl and ssl_mode == SSLMode.IMPLICIT:
-            self._enable_tls(host)
+        try:
+            if use_ssl and ssl_mode == SSLMode.IMPLICIT:
+                self._enable_tls(host)
 
-        code, message = self.status()
-        if code not in (200, 201):
-            raise NNTPReplyError(code, message)
-
-        if use_ssl and ssl_mode == SSLMode.STARTTLS:
-            code, message = self.command("STARTTLS")
-            if code != 382:
-                self.socket.close()
+            code, message = self.status()
+            if code not in (200, 201):
                 raise NNTPReplyError(code, message)
-            self._enable_tls(host)
+
+            if use_ssl and ssl_mode == SSLMode.STARTTLS:
+                code, message = self.command("STARTTLS")
+                if code != 382:
+                    raise NNTPReplyError(code, message)
+                self._enable_tls(host)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                self.socket.close()
+            raise
 
     def _enable_tls(self, host: str) -> None:
         context = ssl.create_default_context()
@@ -728,8 +732,13 @@ class NNTPClient(BaseNNTPClient):
             use_ssl=use_ssl,
             ssl_mode=ssl_mode,
         )
-        if reader:
-            self.mode_reader()
+        try:
+            if reader:
+                self.mode_reader()
+        except BaseException:
+            with contextlib.suppress(OSError):
+                self.socket.close()
+            raise
 
     def __enter__(self) -> Self:
         """Support for the 'with' context manager statement."""

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import socket
 from typing import TYPE_CHECKING
 
 import pytest
 
 import nntp
+from nntp.types import SSLMode
 from tests.scripted import CLOSE
 
 if TYPE_CHECKING:
@@ -27,6 +29,74 @@ def test_repeated_close_and_quit(scripted_server: Start, first: str) -> None:
         client.quit()
     assert client.socket.fileno() == -1
     assert server.received == ["MODE READER"] + (["QUIT"] if first == "quit" else [])
+
+
+@pytest.mark.parametrize(
+    ("greeting", "script", "kwargs"),
+    [
+        (b"500 greeting failed\r\n", {}, {}),
+        (b"202 unexpected greeting\r\n", {}, {}),
+        (
+            b"200 ready\r\n",
+            {"STARTTLS": b"580 TLS failed\r\n"},
+            {"use_ssl": True, "ssl_mode": SSLMode.STARTTLS},
+        ),
+        (
+            b"200 ready\r\n",
+            {"STARTTLS": b"200 unexpected\r\n"},
+            {"use_ssl": True, "ssl_mode": SSLMode.STARTTLS},
+        ),
+        (b"200 ready\r\n", {"MODE READER": b"500 reader failed\r\n"}, {}),
+        (b"200 ready\r\n", {"MODE READER": b"202 unexpected\r\n"}, {}),
+    ],
+)
+def test_initialization_failure_closes_socket(
+    scripted_server: Start,
+    monkeypatch: pytest.MonkeyPatch,
+    greeting: bytes,
+    script: dict[str, bytes],
+    kwargs: dict[str, object],
+) -> None:
+    server = scripted_server(script, greeting=greeting)
+    real_connect = socket.create_connection
+    opened: list[socket.socket] = []
+
+    def connect(address: tuple[str, int], timeout: float) -> socket.socket:
+        sock = real_connect(address, timeout)
+        opened.append(sock)
+        return sock
+
+    monkeypatch.setattr(socket, "create_connection", connect)
+    try:
+        with pytest.raises(nntp.NNTPError):
+            server.client(**kwargs)
+        assert len(opened) == 1
+        assert opened[0].fileno() == -1
+    finally:
+        for sock in opened:
+            sock.close()
+
+
+@pytest.mark.parametrize("mode", [SSLMode.IMPLICIT, SSLMode.STARTTLS])
+def test_tls_handshake_failure_closes_socket(
+    scripted_server: Start, monkeypatch: pytest.MonkeyPatch, mode: SSLMode
+) -> None:
+    server = scripted_server({"STARTTLS": b"382 begin TLS\r\n"})
+    opened: list[socket.socket] = []
+
+    def fail_handshake(client: nntp.BaseNNTPClient, _host: str) -> None:
+        opened.append(client.socket)
+        raise OSError("handshake failed")
+
+    monkeypatch.setattr(nntp.BaseNNTPClient, "_enable_tls", fail_handshake)
+    try:
+        with pytest.raises(OSError, match="handshake failed"):
+            server.client(use_ssl=True, ssl_mode=mode)
+        assert len(opened) == 1
+        assert opened[0].fileno() == -1
+    finally:
+        for sock in opened:
+            sock.close()
 
 
 def test_exception_closes_without_quit(scripted_server: Start) -> None:
