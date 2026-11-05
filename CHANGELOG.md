@@ -96,6 +96,8 @@ section before upgrading.
   (`tests/integration/inn2/setup.sh`).
 - Dependencies in `poetry.lock` refreshed; `pre-commit` is no longer a Poetry
   dev dependency.
+- `tests/integration/inn2/setup.sh` prepares a disposable Debian/Ubuntu test host
+  (inn2 with TLS, NEWNEWS and IHAVE for localhost, no load limits).
 - New changes add a one-line fragment in `changes/` (see `changes/README.md`).
 
 ## 2.0.1 (2024-09-29) and earlier
