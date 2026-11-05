@@ -311,6 +311,23 @@ def test_mode_reader_authenticates_without_retry(scripted_server: Start) -> None
     ]
 
 
+@pytest.mark.parametrize(("verb", "args"), [("MODE", "READER"), ("MODE  READER", None)])
+def test_raw_mode_reader_challenge_does_not_authenticate_or_retry(
+    scripted_server: Start, verb: str, args: str | None
+) -> None:
+    command = f"{verb} {args}" if args else verb
+    server = scripted_server(
+        {
+            command: b"480 authentication required\r\n",
+            "AUTHINFO USER user": b"281 accepted\r\n",
+        }
+    )
+    client = server.client(reader=False, username="user")
+    with pytest.raises(nntp.NNTPTemporaryError, match="480"):
+        client.command(verb, args)
+    assert server.received == [command]
+
+
 def test_authinfo_challenge_does_not_recurse(scripted_server: Start) -> None:
     server = scripted_server({"AUTHINFO USER user": b"480 authenticate\r\n"})
     client = server.client(username="user", password="pass")  # noqa: S106
