@@ -1156,6 +1156,46 @@ class NNTPClient(BaseNNTPClient):
 
         return total, first, last, group
 
+    def listgroup(
+        self, name: str | None = None, range: Range | None = None
+    ) -> Iterator[int]:
+        """LISTGROUP command: select a group and yield its article numbers.
+
+        With no name, use the currently selected group. A range requires an
+        explicit group name because the wire grammar is ``group [range]``.
+        The 211 status metadata is validated but only article numbers are
+        yielded. An empty group or range yields no numbers.
+
+        See <https://www.rfc-editor.org/rfc/rfc3977#section-6.1.2>.
+
+        Raises:
+            ValueError: If a range is supplied without a group name.
+            NNTPDataError: If the status or an article number is malformed.
+        """
+        args = name
+        if range is not None:
+            if not name:
+                raise ValueError("LISTGROUP range requires a group name")
+            args = f"{name} {utils.unparse_range(range)}"
+        code, message = self.command("LISTGROUP", args)
+        if code != 211:
+            raise self._unexpected(code, message)
+        try:
+            parts = message.split()
+            if len(parts) < 4 or any(int(part) < 0 for part in parts[:3]):
+                raise ValueError("Invalid group status")
+        except ValueError as exc:
+            self._info(code, message).close()
+            raise NNTPDataError(f'Invalid LISTGROUP status "{message}"') from exc
+        for line in self.info(code, message):
+            try:
+                number = int(line)
+                if number <= 0:
+                    raise ValueError("Article numbers must be positive")
+            except ValueError as exc:
+                raise NNTPDataError("Invalid LISTGROUP article number") from exc
+            yield number
+
     def next(self) -> tuple[int, str]:
         """NEXT command.
 
@@ -1211,6 +1251,32 @@ class NNTPClient(BaseNNTPClient):
             raise NNTPDataError("Invalid LAST status")
 
         return article, msgid
+
+    def stat(self, msgid_article: str | int | None = None) -> tuple[int, str]:
+        """STAT command: return an article's number and Message-ID, not its text.
+
+        The selector is a Message-ID, an article number, or None for the
+        current article. By Message-ID, the server may return number 0 or
+        the article's number in the currently selected group.
+
+        See <https://www.rfc-editor.org/rfc/rfc3977#section-6.2.4>.
+
+        Raises:
+            NNTPDataError: If the successful response cannot be parsed.
+        """
+        args = str(msgid_article) if msgid_article is not None else None
+        code, message = self.command("STAT", args)
+        if code != 223:
+            raise self._unexpected(code, message)
+        try:
+            parts = message.split(None, 2)
+            number = int(parts[0])
+            message_id = parts[1]
+            if number < 0 or re.fullmatch(r"<[^<>\s]+>", message_id) is None:
+                raise ValueError("Invalid article number or Message-ID")
+        except (IndexError, ValueError) as exc:
+            raise NNTPDataError(f'Invalid STAT status "{message}"') from exc
+        return number, message_id
 
     def _parse_headers(self, lines: Iterator[bytes]) -> HeaderDict:
         """Parse the headers of an ARTICLE or HEAD reply.
@@ -1505,7 +1571,7 @@ class NNTPClient(BaseNNTPClient):
 
     def _xover(
         self,
-        range: Range | None = None,
+        range: str | Range | None = None,
         verb: str = "XOVER",
     ) -> Iterator[tuple[int, HeaderDict]]:
         # get overview fmt before entering generator
@@ -1516,11 +1582,11 @@ class NNTPClient(BaseNNTPClient):
 
         args = None
         if range is not None:
-            args = utils.unparse_range(range)
+            args = utils.unparse_msgid_range(range)
 
         code, message = self.command(verb, args)
         if code != 224:
-            raise NNTPReplyError(code, message)
+            raise self._unexpected(code, message)
 
         yz = verb == "XZVER"
         for line in self.info(code, message, yz=yz):
@@ -1538,6 +1604,20 @@ class NNTPClient(BaseNNTPClient):
             except (IndexError, ValueError):
                 raise NNTPDataError(f"Invalid {verb} response")
             yield articleno, overview
+
+    def over(
+        self, msgid_range: str | Range | None = None
+    ) -> Iterator[tuple[int, HeaderDict]]:
+        """OVER command: yield article numbers and overview fields.
+
+        Accept a Message-ID, article number, range tuple or None for the
+        current article. Results use the same overview parsing as xover(),
+        including full-field normalization. Message-ID lookup is optional
+        on servers; unsupported lookup raises NNTPPermanentError (503).
+
+        See <https://www.rfc-editor.org/rfc/rfc3977#section-8.3>.
+        """
+        return self._xover(msgid_range, verb="OVER")
 
     def xover(
         self,
