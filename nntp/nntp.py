@@ -301,7 +301,7 @@ class BaseNNTPClient:
             if line == b".\r\n":
                 break
             if line.startswith(b"."):
-                yield line[1:]
+                line = line[1:]
             yield line
 
         self._generating = False
@@ -338,21 +338,33 @@ class BaseNNTPClient:
 
         done, buf = False, BytesFifo()
         while not done:
-            try:
-                data = inflate.decompress(next(self._buf()))
-            except zlib.error:
-                raise NNTPDataError("Decompression failed")
-            if data:
+            data = next(self._buf())
+            if inflate.eof:
+                # the terminator follows the compressed data
                 buf.write(data)
-            if inflate.unused_data:
-                buf.write(inflate.unused_data)
+            else:
+                try:
+                    buf.write(inflate.decompress(data))
+                except zlib.error:
+                    raise NNTPDataError("Decompression failed")
+                if inflate.eof:
+                    # whatever came after the end of the gzip stream, once
+                    buf.write(inflate.unused_data)
             for line in buf:
                 if line == b".\r\n":
                     done = True
                     break
                 if line.startswith(b"."):
-                    yield line[1:]
+                    line = line[1:]
                 yield line
+
+        # bytes after the terminator belong to the next reply
+        rest = buf.read()
+        if rest:
+            buffer = BytesFifo()
+            buffer.write(rest)
+            buffer.write(self._buffer.read())
+            self._buffer = buffer
 
         self._generating = False
 
