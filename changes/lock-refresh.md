@@ -1,1 +1,1 @@
-Changed: development and docs dependencies in poetry.lock updated (pytest 9, urllib3, requests, jinja2, virtualenv and others), which clears the Dependabot security alerts; pynntp itself still has no runtime dependencies.
+Changed: development and docs dependencies in poetry.lock updated (pytest 9, urllib3, requests, jinja2 and others), and pre-commit (with virtualenv and filelock) is no longer a Poetry dev dependency; install it yourself to use .pre-commit-config.yaml. This clears the Dependabot security alerts; pynntp itself still has no runtime dependencies.

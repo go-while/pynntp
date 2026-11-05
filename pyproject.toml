@@ -37,7 +37,6 @@ include = [
 [tool.poetry.group.dev.dependencies]
 coverage = "*"
 mypy = "^1.11.2"
-pre-commit = ">=3.8,<5.0"
 pytest = ">=8.3.2"
 ruff = ">=0.6.9"
 sphinx-pyproject = "*"
