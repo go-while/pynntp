@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
+import contextlib
+import threading
+import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 import pytest
 
 import nntp
-from tests.scripted import CLOSE, ReadArticle
+from tests.scripted import CLOSE, ReadArticle, ScriptedServer
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-
-    from tests.scripted import ScriptedServer
 
 
 def test_date_and_quit(scripted_server: Callable[..., ScriptedServer]) -> None:
@@ -69,3 +70,23 @@ def test_greeting_and_default(scripted_server: Callable[..., ScriptedServer]) ->
         client.date()
     client.close()
     assert server.connections == 1
+
+
+def test_stop_ends_long_pause() -> None:
+    """stop() must not wait for a pause in a timed reply (or leave it running)."""
+    server = ScriptedServer({"HELP": [b"100 help\r\n", 60.0, b".\r\n"]})
+    client = server.client(timeout=60)
+    worker = threading.Thread(target=lambda: _ignore_errors(client.help))
+    worker.start()
+    while "HELP" not in server.received:
+        time.sleep(0.01)
+    started = time.monotonic()
+    server.stop()
+    assert time.monotonic() - started < 2
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+
+
+def _ignore_errors(call: Callable[[], object]) -> None:
+    with contextlib.suppress(OSError, nntp.NNTPError):
+        call()

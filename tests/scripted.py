@@ -24,7 +24,6 @@ from __future__ import annotations
 import contextlib
 import socket
 import threading
-import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, BinaryIO, Callable, Union
 
@@ -76,6 +75,7 @@ class ScriptedServer:
         self.articles: list[list[bytes]] = []
         self.connections = 0
         self._lock = threading.Lock()
+        self._stopping = threading.Event()
         self._conns: list[socket.socket] = []
         self._clients: list[nntp.NNTPClient] = []
         self._threads: list[threading.Thread] = []
@@ -91,22 +91,32 @@ class ScriptedServer:
         return client
 
     def stop(self) -> None:
-        """Close clients, listener and connections; wait for the threads."""
+        """Close clients, listener and connections; wait for the threads.
+
+        Pauses in timed replies end at once, so stop() never waits for them.
+        """
+        self._stopping.set()
         for client in self._clients:
             client.socket.close()
         # shutdown() wakes the thread blocked in accept(); close() alone doesn't
         with contextlib.suppress(OSError):
             self._listener.shutdown(socket.SHUT_RDWR)
         self._listener.close()
+        # no new connections after this, so the snapshot below is complete
+        self._accept_thread.join(timeout=5)
         with self._lock:
             conns = list(self._conns)
+            threads = list(self._threads)
         for conn in conns:
             with contextlib.suppress(OSError):
                 conn.shutdown(socket.SHUT_RDWR)
             conn.close()
-        self._accept_thread.join(timeout=5)
-        for thread in self._threads:
+        for thread in threads:
             thread.join(timeout=5)
+        alive = [thread.name for thread in threads if thread.is_alive()]
+        if self._accept_thread.is_alive() or alive:
+            msg = f"scripted server threads still running: {alive}"
+            raise RuntimeError(msg)
 
     def _accept(self) -> None:
         while True:
@@ -114,11 +124,11 @@ class ScriptedServer:
                 conn, _ = self._listener.accept()
             except OSError:
                 return
+            thread = threading.Thread(target=self._serve, args=(conn,), daemon=True)
             with self._lock:
                 self.connections += 1
                 self._conns.append(conn)
-            thread = threading.Thread(target=self._serve, args=(conn,), daemon=True)
-            self._threads.append(thread)
+                self._threads.append(thread)
             thread.start()
 
     def _lookup(self, line: str) -> Reply:
@@ -175,7 +185,8 @@ class ScriptedServer:
             return True
         for step in reply:
             if isinstance(step, float):
-                time.sleep(step)
+                if self._stopping.wait(step):
+                    return False
             else:
                 conn.sendall(step)
         return True
