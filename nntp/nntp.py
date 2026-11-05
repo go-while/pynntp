@@ -615,10 +615,14 @@ class NNTPClient(BaseNNTPClient):
             # Do not replace the exception raised by the user's block.
             with contextlib.suppress(OSError):
                 self.close()
-        elif self._generating:
-            self.close()
         else:
-            self.quit()
+            try:
+                # Shutdown errors must not turn a successful block into failure.
+                with contextlib.suppress(NNTPError, OSError):
+                    if not self._generating:
+                        self.quit()
+            finally:
+                self.close()
         return False
 
     # session administration commands
@@ -671,8 +675,9 @@ class NNTPClient(BaseNNTPClient):
 
         Tells the server to close the connection. After the server acknowledges
         the request to quit the connection is closed both at the server and
-        client. Only useful for graceful shutdown. If you are in a generator
-        use close() instead.
+        client. Only useful for graceful shutdown. The socket is also closed if
+        QUIT fails. An active generator prevents QUIT and raises NNTPSyncError;
+        use close() instead when a reply is still being read.
 
         Once this method has been called, no other methods of the NNTPClient
         object should be called.

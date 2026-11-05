@@ -65,6 +65,24 @@ def test_active_reply_closes_without_quit(scripted_server: Start) -> None:
     assert server.received == ["MODE READER", "CAPABILITIES"]
 
 
+def test_reply_state_error_during_exit_closes_socket(
+    scripted_server: Start, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    server = scripted_server()
+    client = server.client()
+
+    def failed_drain(_client: nntp.NNTPClient) -> bool:
+        raise TimeoutError("reply drain timed out")
+
+    monkeypatch.setattr(
+        type(client), "_generating", property(failed_drain), raising=False
+    )
+    with client:
+        pass
+    assert client.socket.fileno() == -1
+    assert server.received == ["MODE READER"]
+
+
 @pytest.mark.parametrize(
     "reply", [CLOSE, b"400 unavailable\r\n", [1.0, b"205 bye\r\n"]]
 )
@@ -78,8 +96,13 @@ def test_quit_failure_still_closes(scripted_server: Start, reply: object) -> Non
     client.quit()
 
 
-def test_context_quit_failure_still_closes(scripted_server: Start) -> None:
-    server = scripted_server({"QUIT": CLOSE})
-    with pytest.raises(nntp.NNTPError), server.client() as client:
-        pass
+@pytest.mark.parametrize(
+    "reply", [CLOSE, b"400 unavailable\r\n", [1.0, b"205 bye\r\n"]]
+)
+def test_context_quit_failure_still_closes(
+    scripted_server: Start, reply: object
+) -> None:
+    server = scripted_server({"QUIT": reply})
+    with server.client() as client:
+        client.socket.settimeout(0.05)
     assert client.socket.fileno() == -1
