@@ -99,6 +99,54 @@ def test_tls_handshake_failure_closes_socket(
             sock.close()
 
 
+@pytest.mark.parametrize("reader", [True, False])
+def test_starttls_orders_reader_and_discards_plaintext(
+    scripted_server: Start, monkeypatch: pytest.MonkeyPatch, reader: bool
+) -> None:
+    server = scripted_server(
+        {
+            "STARTTLS": b"382 begin TLS\r\n111 19990101000000\r\n",
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    handshakes: list[str] = []
+
+    def fake_tls(client: nntp.BaseNNTPClient, host: str) -> None:
+        assert client._buffer.read() == b""  # noqa: SLF001
+        handshakes.append(host)
+
+    monkeypatch.setattr(nntp.BaseNNTPClient, "_enable_tls", fake_tls)
+    client = server.client(use_ssl=True, ssl_mode=SSLMode.STARTTLS, reader=reader)
+    assert handshakes == ["127.0.0.1"]
+    assert server.received == (["MODE READER"] if reader else []) + ["STARTTLS"]
+    assert client.date().year == 2026
+    client.quit()
+
+
+def test_starttls_reader_precedes_upgrade(
+    scripted_server: Start, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    server = scripted_server({"STARTTLS": b"382 begin TLS\r\n"})
+    monkeypatch.setattr(nntp.BaseNNTPClient, "_enable_tls", lambda *_: None)
+    client = server.client(use_ssl=True, ssl_mode=SSLMode.STARTTLS)
+    assert server.received == ["MODE READER", "STARTTLS"]
+    client.quit()
+
+
+def test_base_starttls_does_not_request_reader(
+    scripted_server: Start, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    server = scripted_server({"STARTTLS": b"382 begin TLS\r\n"})
+    monkeypatch.setattr(nntp.BaseNNTPClient, "_enable_tls", lambda *_: None)
+    client = nntp.BaseNNTPClient(
+        "127.0.0.1", server.port, use_ssl=True, ssl_mode=SSLMode.STARTTLS
+    )
+    try:
+        assert server.received == ["STARTTLS"]
+    finally:
+        client.close()
+
+
 def test_exception_closes_without_quit(scripted_server: Start) -> None:
     server = scripted_server()
     with pytest.raises(ValueError, match="user exception"), server.client() as client:

@@ -228,14 +228,19 @@ class BaseNNTPClient:
                 raise NNTPReplyError(code, message)
 
             if use_ssl and ssl_mode == SSLMode.STARTTLS:
-                code, message = self.command("STARTTLS")
-                if code != 382:
-                    raise NNTPReplyError(code, message)
-                self._enable_tls(host)
+                self._start_tls(host)
         except BaseException:
             with contextlib.suppress(OSError):
                 self.socket.close()
             raise
+
+    def _start_tls(self, host: str) -> None:
+        code, message = self.command("STARTTLS")
+        if code != 382:
+            raise NNTPReplyError(code, message)
+        # Plaintext following 382 must not be interpreted as a TLS reply.
+        self._buffer.clear()
+        self._enable_tls(host)
 
     def _enable_tls(self, host: str) -> None:
         context = ssl.create_default_context()
@@ -723,18 +728,21 @@ class NNTPClient(BaseNNTPClient):
                 socket and ssl modules for further details.
             NNTPReplyError: On bad response code from server.
         """
+        starttls = use_ssl and ssl_mode == SSLMode.STARTTLS
         super().__init__(
             host=host,
             port=port,
             username=username,
             password=password,
             timeout=timeout,
-            use_ssl=use_ssl,
+            use_ssl=use_ssl and not starttls,
             ssl_mode=ssl_mode,
         )
         try:
             if reader:
                 self.mode_reader()
+            if starttls:
+                self._start_tls(host)
         except BaseException:
             with contextlib.suppress(OSError):
                 self.socket.close()
