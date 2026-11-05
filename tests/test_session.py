@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import socket
 from typing import TYPE_CHECKING
 
@@ -145,6 +146,37 @@ def test_base_starttls_does_not_request_reader(
         assert server.received == ["STARTTLS"]
     finally:
         client.close()
+
+
+def test_starttls_does_not_authenticate_in_plaintext(
+    scripted_server: Start, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    modes = iter([b"480 authentication required\r\n", b"200 ready\r\n"])
+    server = scripted_server(
+        {
+            "MODE READER": lambda _line: next(modes),
+            "AUTHINFO USER user": b"381 password needed\r\n",
+            "AUTHINFO PASS pass": b"281 accepted\r\n",
+            "STARTTLS": b"382 begin TLS\r\n",
+        }
+    )
+    before_tls: list[str] = []
+
+    def enable_tls(_client: nntp.BaseNNTPClient, _host: str) -> None:
+        before_tls.extend(server.received)
+
+    monkeypatch.setattr(nntp.BaseNNTPClient, "_enable_tls", enable_tls)
+    # Failing closed is acceptable; disclosing credentials before TLS isn't.
+    with contextlib.suppress(nntp.NNTPError):
+        server.client(
+            username="user",
+            password="pass",  # noqa: S106 (dummy scripted-server credential)
+            use_ssl=True,
+            ssl_mode=SSLMode.STARTTLS,
+        )
+    assert not any(
+        line.startswith("AUTHINFO") for line in (before_tls or server.received)
+    )
 
 
 def test_exception_closes_without_quit(scripted_server: Start) -> None:
