@@ -27,6 +27,7 @@ import ssl
 import tempfile
 import weakref
 import zlib
+from collections.abc import Iterator
 from functools import cached_property
 from typing import TYPE_CHECKING, Literal
 
@@ -37,7 +38,7 @@ from .types import SSLMode
 from .yenc import YEnc, check_trailer, is_keyword_line, trailer_crc32
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable, Iterator, Mapping
+    from collections.abc import Callable, Iterable, Mapping
     from datetime import datetime
     from types import TracebackType
 
@@ -152,6 +153,26 @@ class _Reply:
     def close(self) -> None:
         """Read and drop the rest of the reply now."""
         self._client._drain_reply(self._source)  # noqa: SLF001
+
+
+class _TextReply(Iterator[str]):
+    """The lines of a reply as str, as returned by ``info()``.
+
+    Unlike a generator, its close() drops the rest of the reply at once, also
+    before the first line was read.
+    """
+
+    def __init__(self, reply: _Reply, encoding: str, errors: str) -> None:
+        self._reply = reply
+        self._encoding = encoding
+        self._errors = errors
+
+    def __next__(self) -> str:
+        return next(self._reply).decode(self._encoding, self._errors)
+
+    def close(self) -> None:
+        """Read and drop the rest of the reply now."""
+        self._reply.close()
 
 
 def _inflate(inflate: zlib._Decompress, data: bytes) -> bytes:
@@ -612,9 +633,10 @@ class BaseNNTPClient:
         Returns:
             An iterator over the lines of the info response as strings. The
             reply counts as being read from the moment info() returns until
-            the iterator is exhausted or dropped.
+            the iterator is exhausted, closed with its close() method, or
+            dropped.
         """
-        return self._decode(self._info(code, message, yz))
+        return _TextReply(self._info(code, message, yz), self.encoding, self.errors)
 
     def _decode(self, lines: Iterable[bytes]) -> Iterator[str]:
         """Decode lines of bytes to str."""
