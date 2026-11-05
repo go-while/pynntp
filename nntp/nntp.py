@@ -875,7 +875,10 @@ class NNTPClient(BaseNNTPClient):
         if code != 111:
             raise NNTPReplyError(code, message)
 
-        return utils.parse_date(message)
+        try:
+            return utils.parse_date(message)
+        except ValueError as exc:
+            raise NNTPDataError(f'Invalid DATE response "{message}"') from exc
 
     def help(self) -> str:
         """HELP command.
@@ -919,7 +922,11 @@ class NNTPClient(BaseNNTPClient):
             raise NNTPReplyError(code, message)
 
         for line in self.info(code, message):
-            yield utils.parse_newsgroup(line)
+            try:
+                group = utils.parse_newsgroup(line)
+            except ValueError as exc:
+                raise NNTPDataError(str(exc)) from exc
+            yield group
 
     def newnews(self, pattern: str, timestamp: datetime) -> Iterator[str]:
         """NEWNEWS command.
@@ -999,7 +1006,11 @@ class NNTPClient(BaseNNTPClient):
             and status for the newsgroup, for each newsgroup.
         """
         for line in self.list("ACTIVE", args=pattern):
-            yield utils.parse_newsgroup(line)
+            try:
+                group = utils.parse_newsgroup(line)
+            except ValueError as exc:
+                raise NNTPDataError(str(exc)) from exc
+            yield group
 
     def list_active_times(self) -> Iterator[tuple[str, datetime, str]]:
         """LIST ACTIVE TIMES command.
@@ -1088,9 +1099,9 @@ class NNTPClient(BaseNNTPClient):
                 raise NNTPDataError("Invalid LIST OVERVIEW.FMT")
             if suffix and not name:
                 name, suffix = suffix, name
-            if suffix and suffix != "full":
+            if suffix and suffix.casefold() != "full":
                 raise NNTPDataError("Invalid LIST OVERVIEW.FMT")
-            yield (name, suffix == "full")
+            yield (name, suffix.casefold() == "full")
 
     def list_extensions(self) -> Iterator[str]:
         """LIST EXTENSIONS command.
@@ -1099,6 +1110,10 @@ class NNTPClient(BaseNNTPClient):
         server at any given time.
 
         See <https://tools.ietf.org/html/draft-ietf-nntpext-base-20#section-5.3>
+
+        This obsolete draft command expects legacy status 202. Servers such as
+        INN may reject it with 501; that NNTPPermanentError is propagated. Use
+        capabilities() for RFC 3977 capability discovery instead.
 
         Yields:
             The name of the extension of each of the available extensions.
@@ -1471,8 +1486,13 @@ class NNTPClient(BaseNNTPClient):
     @cached_property
     def overview_fmt(self) -> tuple[str, ...]:
         try:
-            return tuple(name for name, opt in self.list_overview_fmt())
+            layout = tuple(self.list_overview_fmt())
+            self._overview_full_fields = frozenset(
+                name.casefold() for name, full in layout if full
+            )
+            return tuple(name for name, _full in layout)
         except NNTPError:
+            self._overview_full_fields = frozenset()
             return (
                 "Subject",
                 "From",
@@ -1490,6 +1510,9 @@ class NNTPClient(BaseNNTPClient):
     ) -> Iterator[tuple[int, HeaderDict]]:
         # get overview fmt before entering generator
         fmt = self.overview_fmt
+        full_fields: frozenset[str] = getattr(
+            self, "_overview_full_fields", frozenset()
+        )
 
         args = None
         if range is not None:
@@ -1501,10 +1524,17 @@ class NNTPClient(BaseNNTPClient):
 
         yz = verb == "XZVER"
         for line in self.info(code, message, yz=yz):
-            parts = line.rstrip().split("\t")
+            parts = line.rstrip("\r\n").split("\t")
             try:
                 articleno = int(parts[0])
-                overview = HeaderDict(zip(fmt, parts[1:], strict=False))
+                fields = []
+                for name, value in zip(fmt, parts[1:], strict=False):
+                    if name.casefold() in full_fields and value:
+                        label, colon, content = value.partition(":")
+                        if colon and label.casefold() == name.casefold():
+                            value = content.lstrip(" \t")
+                    fields.append((name, value))
+                overview = HeaderDict(fields)
             except (IndexError, ValueError):
                 raise NNTPDataError(f"Invalid {verb} response")
             yield articleno, overview
