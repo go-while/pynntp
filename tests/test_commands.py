@@ -7,6 +7,7 @@ import gzip
 import zlib
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
+from unittest import mock
 
 import pytest
 
@@ -1150,3 +1151,138 @@ def test_eager_command_does_not_read_reply_data_at_call(scripted_server: Start) 
     assert server.received == ["LIST ACTIVE"]
     client.close()
     del reply
+
+
+@pytest.mark.parametrize("verb", ["POST", "IHAVE"])
+@pytest.mark.parametrize("timeout_at", [1, 2])
+@pytest.mark.parametrize("close_fails", [False, True])
+def test_article_partial_send_timeout_closes_without_retry(
+    scripted_server: Start,
+    monkeypatch: pytest.MonkeyPatch,
+    verb: str,
+    timeout_at: int,
+    *,
+    close_fails: bool,
+) -> None:
+    ready, accepted = (340, 240) if verb == "POST" else (335, 235)
+    server = scripted_server(
+        {
+            verb: ReadArticle(
+                f"{ready} send article\r\n".encode(), f"{accepted} ok\r\n".encode()
+            )
+        }
+    )
+    client = server.client(reader=False)
+    real_socket = client.socket
+    body_sends = 0
+
+    def send(data: bytes) -> None:
+        nonlocal body_sends
+        if data.startswith((b"POST\r\n", b"IHAVE ")):
+            real_socket.sendall(data)
+            return
+        body_sends += 1
+        if body_sends == timeout_at:
+            real_socket.sendall(data[:7])  # Some bytes reached the server.
+            raise TimeoutError("partial article send timed out")
+        real_socket.sendall(data)
+
+    def failing_close() -> None:
+        real_socket.close()
+        raise OSError("close failed")
+
+    if close_fails:
+        monkeypatch.setattr(client, "close", failing_close)
+    fake = mock.Mock(wraps=real_socket)
+    fake.sendall.side_effect = send
+    client.socket = fake
+    args = ("<a@b>",) if verb == "IHAVE" else ()
+    try:
+        with pytest.raises(nntp.NNTPTimeoutError) as error:
+            getattr(client, verb.lower())(*args, body=[b"x" * 65536] * 3)
+        assert isinstance(error.value, TimeoutError)
+        assert isinstance(error.value.__cause__, TimeoutError)
+        assert real_socket.fileno() == -1
+        assert body_sends == timeout_at
+        assert server.received == (["POST"] if verb == "POST" else ["IHAVE <a@b>"])
+        with pytest.raises(nntp.NNTPError, match="closed"):
+            client.date()
+    finally:
+        client.socket = real_socket  # Fixture teardown closes the actual socket.
+
+
+@pytest.mark.parametrize("verb", ["POST", "IHAVE"])
+@pytest.mark.parametrize("final", [False, True])
+def test_article_status_timeout_closes_without_retry(
+    scripted_server: Start, verb: str, *, final: bool
+) -> None:
+    ready = 340 if verb == "POST" else 335
+    server = scripted_server(
+        {
+            verb: ReadArticle(f"{ready} send\r\n".encode(), b"")
+            if final
+            else [60.0, b"335 late\r\n"]
+        }
+    )
+    client = server.client(reader=False)
+    client.socket.settimeout(0.05)
+    args = ("<a@b>",) if verb == "IHAVE" else ()
+    with pytest.raises(nntp.NNTPTimeoutError):
+        getattr(client, verb.lower())(*args, body=b"article\n")
+    assert client.socket.fileno() == -1
+    assert len(server.received) == 1
+    assert bool(server.articles) == final
+    with pytest.raises(nntp.NNTPError, match="closed"):
+        client.date()
+
+
+@pytest.mark.parametrize("verb", ["POST", "IHAVE"])
+def test_article_source_timeout_does_not_close_or_send(
+    scripted_server: Start, verb: str
+) -> None:
+    server = scripted_server({"DATE": b"111 20260102030405\r\n"})
+    client = server.client(reader=False)
+
+    def source() -> Iterator[bytes]:
+        yield b"good\n"
+        raise TimeoutError("source timed out before transfer")
+
+    args = ("<a@b>",) if verb == "IHAVE" else ()
+    with pytest.raises(TimeoutError, match="source") as error:
+        getattr(client, verb.lower())(*args, body=source())
+    assert not isinstance(error.value, nntp.NNTPError)
+    assert client.socket.fileno() != -1
+    assert server.received == []
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("verb", ["POST", "IHAVE"])
+@pytest.mark.parametrize("final", [False, True])
+def test_article_preserves_typed_status_timeout_and_cause(
+    scripted_server: Start, monkeypatch: pytest.MonkeyPatch, verb: str, *, final: bool
+) -> None:
+    ready, accepted = (340, 240) if verb == "POST" else (335, 235)
+    server = scripted_server(
+        {verb: ReadArticle(f"{ready} send\r\n".encode(), f"{accepted} ok\r\n".encode())}
+    )
+    client = server.client(reader=False)
+    real_status = client.status
+    original = nntp.NNTPTimeoutError("transport timed out")
+    cause = TimeoutError("underlying read timeout")
+    original.__cause__ = cause
+    statuses = 0
+
+    def status() -> tuple[int, str]:
+        nonlocal statuses
+        statuses += 1
+        if statuses == (2 if final else 1):
+            raise original
+        return real_status()
+
+    monkeypatch.setattr(client, "status", status)
+    args = ("<a@b>",) if verb == "IHAVE" else ()
+    with pytest.raises(nntp.NNTPTimeoutError) as error:
+        getattr(client, verb.lower())(*args, body=b"article\n")
+    assert error.value is original
+    assert error.value.__cause__ is cause
+    assert client.socket.fileno() == -1

@@ -1977,13 +1977,22 @@ class NNTPClient(BaseNNTPClient):
             article.write(b".\r\n")
             article.seek(0)
 
-            code, message = self.command(verb, args)
-            if code != ready:
-                raise self._unexpected(code, message)
-            while chunk := article.read(65536):
-                self.socket.sendall(chunk)
+            try:
+                code, message = self.command(verb, args)
+                if code != ready:
+                    raise self._unexpected(code, message)
+                while chunk := article.read(65536):
+                    self.socket.sendall(chunk)
+                code, message = self.status()
+            except TimeoutError as exc:
+                # The server may hold a partial article or a delayed status;
+                # neither state permits safely sending another command.
+                with contextlib.suppress(OSError):
+                    self.close()
+                if isinstance(exc, NNTPTimeoutError):
+                    raise
+                raise NNTPTimeoutError(f"{verb} article transfer timed out") from exc
 
-        code, message = self.status()
         if code != accepted:
             raise self._unexpected(code, message)
         return message
@@ -2012,6 +2021,8 @@ class NNTPClient(BaseNNTPClient):
             ValueError: If the offered Message-ID is not bracketed printable
                 ASCII of at most 250 characters, or a header contains CR/LF.
             NNTPDataError: If the body contains NUL or bare CR.
+            NNTPTimeoutError: If transfer or status reading times out. The
+                connection is closed; no transfer is retried automatically.
 
         See <https://www.rfc-editor.org/rfc/rfc3977#section-6.3.2>.
         """
@@ -2041,6 +2052,9 @@ class NNTPClient(BaseNNTPClient):
             NNTPDataError: If binary characters are detected in the message
                 body.
             ValueError: If a header name or value contains CR or LF.
+            NNTPTimeoutError: If transfer or status reading times out. The
+                connection is closed; the server may already have accepted
+                the article, so no automatic retry is attempted.
 
         Returns:
             A value that evaluates to true if posting the message succeeded.
