@@ -16,6 +16,7 @@ from tests.scripted import ReadArticle
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator
 
+    from nntp.types import Range
     from tests.scripted import ScriptedServer
 
     Start = Callable[..., ScriptedServer]
@@ -500,4 +501,192 @@ def test_list_extensions_unsupported_propagates(scripted_server: Start) -> None:
     with pytest.raises(nntp.NNTPPermanentError) as error:
         list(client.list_extensions())
     assert error.value.code == 501
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
+    ("selector", "command", "number"),
+    [(None, "STAT", 42), (42, "STAT 42", 42), ("<a@b>", "STAT <a@b>", 0)],
+)
+def test_stat_forms(
+    scripted_server: Start, selector: str | int | None, command: str, number: int
+) -> None:
+    server = scripted_server(
+        {command: f"223 {number} <a@b> article exists\r\n".encode()}
+    )
+    assert server.client().stat(selector) == (number, "<a@b>")
+    assert server.received == ["MODE READER", command]
+
+
+@pytest.mark.parametrize(
+    "message", [b"no-number <a@b>", b"1", b"1 no-id", b"-1 <a@b>", b"1 <>"]
+)
+def test_stat_invalid_data(scripted_server: Start, message: bytes) -> None:
+    server = scripted_server(
+        {"STAT": b"223 " + message + b"\r\n", "DATE": b"111 20260102030405\r\n"}
+    )
+    client = server.client()
+    with pytest.raises(nntp.NNTPDataError, match="STAT"):
+        client.stat()
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
+    ("name", "article_range", "command", "numbers"),
+    [
+        (None, None, "LISTGROUP", [1, 3, 7]),
+        ("local.test", None, "LISTGROUP local.test", [1, 3, 7]),
+        ("local.test", 1, "LISTGROUP local.test 1", [1]),
+        ("local.test", (1,), "LISTGROUP local.test 1-", [1, 3, 7]),
+        ("local.test", (1, 3), "LISTGROUP local.test 1-3", [1, 3]),
+    ],
+)
+def test_listgroup_forms(
+    scripted_server: Start,
+    name: str | None,
+    article_range: Range | None,
+    command: str,
+    numbers: list[int],
+) -> None:
+    block = b"".join(f"{number}\r\n".encode() for number in numbers)
+    server = scripted_server(
+        {command: b"211 3 1 7 local.test list follows\r\n" + block + b".\r\n"}
+    )
+    assert list(server.client().listgroup(name, article_range)) == numbers
+    assert server.received == ["MODE READER", command]
+
+
+def test_listgroup_empty_and_range_requires_name(scripted_server: Start) -> None:
+    server = scripted_server({"LISTGROUP": b"211 0 0 0 local.empty\r\n.\r\n"})
+    client = server.client()
+    with pytest.raises(ValueError, match="name"):
+        list(client.listgroup(range=(1, 3)))
+    assert server.received == ["MODE READER"]
+    assert list(client.listgroup("local.empty")) == []
+
+
+@pytest.mark.parametrize("status", ["bad", "3 NaN 7 local.test", "-1 1 7 local.test"])
+def test_listgroup_bad_status_drains(scripted_server: Start, status: str) -> None:
+    server = scripted_server(
+        {
+            "LISTGROUP": f"211 {status}\r\n1\r\n3\r\n.\r\n".encode(),
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client()
+    with pytest.raises(nntp.NNTPDataError, match="LISTGROUP"):
+        list(client.listgroup())
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("number", ["0", "-1", "NaN"])
+def test_listgroup_bad_number_drains(scripted_server: Start, number: str) -> None:
+    server = scripted_server(
+        {
+            "LISTGROUP": f"211 3 1 7 local.test\r\n{number}\r\n3\r\n.\r\n".encode(),
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client()
+    with pytest.raises(nntp.NNTPDataError, match="LISTGROUP"):
+        list(client.listgroup())
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+def test_listgroup_abandoned_reply_drains(scripted_server: Start) -> None:
+    server = scripted_server(
+        {
+            "LISTGROUP": b"211 3 1 7 local.test\r\n1\r\n3\r\n7\r\n.\r\n",
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client()
+    assert next(client.listgroup("local.test")) == 1
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
+    ("selector", "args", "number"),
+    [
+        (None, "", 1),
+        (1, " 1", 1),
+        ((1,), " 1-", 1),
+        ((1, 3), " 1-3", 1),
+        ("<a@b>", " <a@b>", 0),
+        ("<a@b>", " <a@b>", 7),
+    ],
+)
+def test_over_forms(
+    scripted_server: Start, selector: str | Range | None, args: str, number: int
+) -> None:
+    reply = (
+        f"224 overview\r\n{number}\tsubject\tXref: host local.test:1\r\n.\r\n".encode()
+    )
+    server = scripted_server(
+        {
+            "LIST OVERVIEW.FMT": b"215 format\r\nSubject:\r\nXref:FULL\r\n.\r\n",
+            f"OVER{args}": reply,
+        }
+    )
+    entries = list(server.client().over(selector))
+    assert [(n, fields["Subject"], fields["Xref"]) for n, fields in entries] == [
+        (number, "subject", "host local.test:1")
+    ]
+    assert server.received == ["MODE READER", "LIST OVERVIEW.FMT", f"OVER{args}"]
+
+
+@pytest.mark.parametrize("verb", ["STAT", "LISTGROUP", "OVER"])
+def test_new_command_wrong_success_drains(scripted_server: Start, verb: str) -> None:
+    server = scripted_server(
+        {
+            "LIST OVERVIEW.FMT": b"500 unknown\r\n",
+            verb: b"215 wrong success\r\nignored\r\n.\r\n",
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client()
+
+    def run_command() -> None:
+        result = getattr(client, verb.lower())()
+        if verb != "STAT":
+            list(result)
+
+    with pytest.raises(nntp.NNTPReplyError) as error:
+        run_command()
+    assert error.value.code == 215
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+def test_over_message_id_unsupported(scripted_server: Start) -> None:
+    server = scripted_server(
+        {"LIST OVERVIEW.FMT": b"500 unknown\r\n", "OVER": b"503 MSGID unsupported\r\n"}
+    )
+    with pytest.raises(nntp.NNTPPermanentError) as error:
+        list(server.client().over("<a@b>"))
+    assert error.value.code == 503
+
+
+@pytest.mark.parametrize(
+    ("verb", "code"), [("STAT", 430), ("LISTGROUP", 411), ("OVER", 423)]
+)
+def test_new_command_negative_response_is_reusable(
+    scripted_server: Start, verb: str, code: int
+) -> None:
+    server = scripted_server(
+        {
+            "LIST OVERVIEW.FMT": b"500 unknown\r\n",
+            verb: f"{code} no article or group\r\n".encode(),
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client()
+
+    def run_command() -> None:
+        result = getattr(client, verb.lower())()
+        if verb != "STAT":
+            list(result)
+
+    with pytest.raises(nntp.NNTPTemporaryError) as error:
+        run_command()
+    assert error.value.code == code
     assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
