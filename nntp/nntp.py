@@ -216,6 +216,7 @@ class BaseNNTPClient:
 
         self.username = username
         self.password = password
+        self._tls_pending = use_ssl and ssl_mode == SSLMode.STARTTLS
 
         # connect
         self.socket = socket.create_connection((host, port), timeout=timeout)
@@ -241,6 +242,7 @@ class BaseNNTPClient:
         # Plaintext following 382 must not be interpreted as a TLS reply.
         self._buffer.clear()
         self._enable_tls(host)
+        self._tls_pending = False
 
     def _enable_tls(self, host: str) -> None:
         context = ssl.create_default_context()
@@ -652,7 +654,7 @@ class BaseNNTPClient:
         try:
             code, message = self.status()
         except NNTPTemporaryError as e:
-            if e.code != 480:
+            if e.code != 480 or self._tls_pending:
                 raise
             code, message = self.command("AUTHINFO USER", self.username)
             if code == 381:
@@ -723,6 +725,12 @@ class NNTPClient(BaseNNTPClient):
             ssl_mode: SSL mode to use
             reader: Use reader mode
 
+        Note:
+            With STARTTLS, MODE READER is attempted before upgrading. If it
+            requires authentication or encryption (480/483), the upgrade
+            proceeds without retrying MODE READER or sending credentials in
+            plaintext.
+
         Raises:
             socket.error: On error in underlying socket and/or ssl wrapper. See
                 socket and ssl modules for further details.
@@ -739,8 +747,13 @@ class NNTPClient(BaseNNTPClient):
             ssl_mode=ssl_mode,
         )
         try:
+            self._tls_pending = starttls
             if reader:
-                self.mode_reader()
+                try:
+                    self.mode_reader()
+                except NNTPTemporaryError as exc:
+                    if not starttls or exc.code not in (480, 483):
+                        raise
             if starttls:
                 self._start_tls(host)
         except BaseException:

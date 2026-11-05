@@ -179,6 +179,63 @@ def test_starttls_does_not_authenticate_in_plaintext(
     )
 
 
+@pytest.mark.parametrize("response", [b"480 authenticate\r\n", b"483 use TLS\r\n"])
+def test_starttls_reader_auth_is_deferred(
+    scripted_server: Start, monkeypatch: pytest.MonkeyPatch, response: bytes
+) -> None:
+    dates = iter([b"480 authenticate\r\n", b"111 20260102030405\r\n"])
+    server = scripted_server(
+        {
+            "MODE READER": response,
+            "STARTTLS": b"382 begin TLS\r\n",
+            "DATE": lambda _line: next(dates),
+            "AUTHINFO USER user": b"381 password required\r\n",
+            "AUTHINFO PASS pass": b"281 accepted\r\n",
+        }
+    )
+    before_tls: list[str] = []
+
+    def enable_tls(_client: nntp.BaseNNTPClient, _host: str) -> None:
+        before_tls.extend(server.received)
+
+    monkeypatch.setattr(nntp.BaseNNTPClient, "_enable_tls", enable_tls)
+    client = server.client(
+        username="user",
+        password="pass",  # noqa: S106 (dummy test credential)
+        use_ssl=True,
+        ssl_mode=SSLMode.STARTTLS,
+    )
+    assert before_tls == ["MODE READER", "STARTTLS"]
+    assert client.date().year == 2026
+    assert server.received == [
+        "MODE READER",
+        "STARTTLS",
+        "DATE",
+        "AUTHINFO USER user",
+        "AUTHINFO PASS pass",
+        "DATE",
+    ]
+    client.close()
+
+
+@pytest.mark.parametrize("base", [True, False])
+def test_starttls_auth_challenge_never_sends_credentials(
+    scripted_server: Start, base: bool
+) -> None:
+    server = scripted_server({"STARTTLS": b"480 authenticate\r\n"})
+    cls = nntp.BaseNNTPClient if base else nntp.NNTPClient
+    with pytest.raises(nntp.NNTPTemporaryError, match="480"):
+        cls(
+            "127.0.0.1",
+            server.port,
+            username="user",
+            password="pass",  # noqa: S106 (dummy test credential)
+            use_ssl=True,
+            ssl_mode=SSLMode.STARTTLS,
+        )
+    assert server.received == ([] if base else ["MODE READER"]) + ["STARTTLS"]
+
+
 def test_exception_closes_without_quit(scripted_server: Start) -> None:
     server = scripted_server()
     with pytest.raises(ValueError, match="user exception"), server.client() as client:
