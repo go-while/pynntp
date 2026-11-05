@@ -11,9 +11,10 @@ import pytest
 
 import nntp
 from nntp.types import Newsgroup
+from tests.scripted import ReadArticle
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable, Iterator
 
     from tests.scripted import ScriptedServer
 
@@ -38,6 +39,132 @@ def test_list_active_water_marks(scripted_server: Start) -> None:
     ]
     assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
     assert server.received == ["MODE READER", "LIST ACTIVE local.*", "DATE"]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"good\nbad\0line\n",
+        b"good\nbare\rreturn\n",
+        b"bare\r",
+        "good\nbad\0line",
+        [b"good\n", b"bad\rline"],
+    ],
+)
+def test_post_invalid_body_sends_nothing(
+    scripted_server: Start, body: str | bytes | Iterable[bytes]
+) -> None:
+    server = scripted_server(
+        {
+            "POST": ReadArticle(b"340 send article\r\n", b"240 accepted\r\n"),
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client()
+    with pytest.raises(nntp.NNTPDataError, match="Illegal characters"):
+        client.post({"Subject": "bad body"}, body)
+    assert server.received == ["MODE READER"]
+    assert server.articles == []
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+def test_post_preflights_large_iterator(scripted_server: Start) -> None:
+    def body() -> Iterator[bytes]:
+        for _ in range(17):
+            yield b"x" * 65536 + b"\n"
+        yield b"bad\0line\n"
+
+    server = scripted_server(
+        {"POST": ReadArticle(b"340 send article\r\n", b"240 accepted\r\n")}
+    )
+    client = server.client()
+    with pytest.raises(nntp.NNTPDataError):
+        client.post(body=body())
+    assert server.received == ["MODE READER"]
+    assert server.articles == []
+
+
+def test_post_iterator_error_sends_nothing(scripted_server: Start) -> None:
+    def body() -> Iterator[bytes]:
+        yield b"good\n"
+        raise RuntimeError("source failed")
+
+    server = scripted_server(
+        {"POST": ReadArticle(b"340 send article\r\n", b"240 accepted\r\n")}
+    )
+    client = server.client()
+    with pytest.raises(RuntimeError, match="source failed"):
+        client.post(body=body())
+    assert server.received == ["MODE READER"]
+    assert server.articles == []
+
+
+def test_post_large_valid_body(scripted_server: Start) -> None:
+    server = scripted_server(
+        {"POST": ReadArticle(b"340 send article\r\n", b"240 accepted\r\n")}
+    )
+    line = b"x" * 65536
+    assert server.client().post(body=(line for _ in range(17))) is True
+    assert server.articles == [[b"\r\n", *[line + b"\r\n"] * 17]]
+
+
+def test_post_header_encoding_error_sends_nothing(scripted_server: Start) -> None:
+    server = scripted_server(
+        {"POST": ReadArticle(b"340 send article\r\n", b"240 accepted\r\n")}
+    )
+    client = server.client()
+    with pytest.raises(UnicodeEncodeError):
+        client.post({"Subject": "invalid \ud800"}, b"body")
+    assert server.received == ["MODE READER"]
+    assert server.articles == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "first\n.dot\r\n\nlast",
+        b"first\n.dot\r\n\nlast",
+        [b"first\n", b".dot\r\n", b"", b"last"],
+        [b"first\n.dot\r\n\nlast"],
+    ],
+)
+def test_post_normalizes_and_dot_stuffs(
+    scripted_server: Start, body: str | bytes | Iterable[bytes]
+) -> None:
+    server = scripted_server(
+        {"POST": ReadArticle(b"340 send article\r\n", b"240 accepted\r\n")}
+    )
+    assert server.client().post({"Subject": "wire"}, body) is True
+    assert server.articles == [
+        [
+            b"Subject: wire\r\n",
+            b"\r\n",
+            b"first\r\n",
+            b"..dot\r\n",
+            b"\r\n",
+            b"last\r\n",
+        ]
+    ]
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        (b"Article received <id@example.test>", "<id@example.test>"),
+        (b"<id@example.test> accepted", "<id@example.test>"),
+        (b"Accepted (<id@example.test>)", "<id@example.test>"),
+        (b"Article received", True),
+        (b"", True),
+    ],
+)
+def test_post_returns_message_id(
+    scripted_server: Start, message: bytes, expected: str | bool
+) -> None:
+    server = scripted_server(
+        {"POST": ReadArticle(b"340 send article\r\n", b"240 " + message + b"\r\n")}
+    )
+    assert server.client().post(body=b"ok") == expected
+    assert server.received == ["MODE READER", "POST"]
 
 
 def test_newgroups_water_marks(scripted_server: Start) -> None:
