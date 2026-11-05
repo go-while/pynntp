@@ -397,3 +397,111 @@ def test_gzip_corrupt_read_closes(scripted_server: Start) -> None:
     with pytest.raises(nntp.NNTPDataError, match="connection closed"):
         list(client.list())
     assert client.socket.fileno() == -1
+
+
+# yEnc size and CRC checks (A3)
+
+YDATA = bytes(range(256)) * 3
+
+
+def _yenc_body(
+    data: bytes,
+    *,
+    begin: bytes = b"=ybegin line=128 size=%(size)d name=x.bin",
+    part: bytes | None = None,
+    end: bytes = b"=yend size=%(size)d crc32=%(crc)08x",
+    after: bytes = b"",
+    size: int | None = None,
+    crc: int | None = None,
+) -> bytes:
+    values = {
+        b"size": len(data) if size is None else size,
+        b"crc": binascii.crc32(data) if crc is None else crc,
+    }
+    lines = [begin % values]
+    if part is not None:
+        lines.append(part % values)
+    lines += [*_yenc_lines(data), end % values]
+    wire = b"".join((b"." + x if x.startswith(b".") else x) + b"\r\n" for x in lines)
+    return b"222 0 <a@b> body\r\n" + wire + after + b".\r\n"
+
+
+def _body_server(scripted_server: Start, reply: bytes) -> nntp.NNTPClient:
+    return scripted_server({"BODY": reply, "DATE": DATE}).client()
+
+
+def test_yenc_single_part_ok(scripted_server: Start) -> None:
+    client = _body_server(scripted_server, _yenc_body(YDATA))
+    assert client.body("<a@b>") == YDATA
+    assert client.date() == DATE_VALUE
+
+
+def test_yenc_bad_crc(scripted_server: Start) -> None:
+    client = _body_server(scripted_server, _yenc_body(YDATA, crc=0x12345678))
+    with pytest.raises(nntp.NNTPDataError, match="CRC"):
+        client.body("<a@b>")
+    assert client.date() == DATE_VALUE  # the reply was read to its end
+
+
+def test_yenc_bad_size(scripted_server: Start) -> None:
+    client = _body_server(scripted_server, _yenc_body(YDATA, size=len(YDATA) + 1))
+    with pytest.raises(nntp.NNTPDataError, match="size"):
+        client.body("<a@b>")
+    assert client.date() == DATE_VALUE
+
+
+def test_yenc_missing_trailer(scripted_server: Start) -> None:
+    reply = _yenc_body(YDATA).replace(b"=yend", b"not a trailer")
+    client = _body_server(scripted_server, reply)
+    with pytest.raises(nntp.NNTPDataError, match="trailer"):
+        client.body("<a@b>")
+    assert client.date() == DATE_VALUE
+
+
+def test_yenc_multipart_pcrc32(scripted_server: Start) -> None:
+    """In a part, pcrc32 is checked; crc32 is the whole file's CRC."""
+    reply = _yenc_body(
+        YDATA,
+        begin=b"=ybegin part=2 total=3 line=128 size=9999 name=x.bin",
+        part=b"=ypart begin=769 end=%(size)d",
+        end=b"=yend size=%(size)d part=2 pcrc32=%(crc)08x crc32=deadbeef",
+    )
+    client = _body_server(scripted_server, reply)
+    assert client.body("<a@b>") == YDATA
+
+
+def test_yenc_multipart_bad_pcrc32(scripted_server: Start) -> None:
+    reply = _yenc_body(
+        YDATA,
+        begin=b"=ybegin part=2 total=3 line=128 size=9999 name=x.bin",
+        part=b"=ypart begin=769 end=%(size)d",
+        end=b"=yend size=%(size)d part=2 pcrc32=00000001",
+    )
+    client = _body_server(scripted_server, reply)
+    with pytest.raises(nntp.NNTPDataError, match="CRC"):
+        client.body("<a@b>")
+
+
+def test_yenc_multipart_crc32_only_not_checked(scripted_server: Start) -> None:
+    """A part with only the whole file's crc32 can't be checked."""
+    reply = _yenc_body(
+        YDATA,
+        begin=b"=ybegin part=3 total=3 line=128 size=9999 name=x.bin",
+        part=b"=ypart begin=1 end=%(size)d",
+        end=b"=yend size=%(size)d part=3 crc32=deadbeef",
+    )
+    client = _body_server(scripted_server, reply)
+    assert client.body("<a@b>") == YDATA
+
+
+def test_yenc_short_crc_and_text_after_trailer(scripted_server: Start) -> None:
+    """CRCs without leading zeros; text after =yend is not decoded."""
+    data = b"\x00" * 3 + b"abc"
+    crc = binascii.crc32(data)
+    reply = _yenc_body(
+        data,
+        end=b"=yend size=%(size)d crc32=" + (b"%x" % crc).lstrip(b"0"),
+        after=b"-- \r\nsignature\r\n",
+    )
+    client = _body_server(scripted_server, reply)
+    assert client.body("<a@b>") == data

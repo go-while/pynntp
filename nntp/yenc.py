@@ -23,10 +23,11 @@ import re
 import struct
 import zlib
 
-__all__ = ["YEnc", "trailer_crc32"]
+__all__ = ["YEnc", "check_trailer", "trailer_crc32"]
 
 
 _crc32_re = re.compile(b"\\s+crc(?:32)?=([0-9a-fA-F]{8})")
+_keyword_re = re.compile(rb"\s(size|part|pcrc32|crc32)=([0-9a-fA-F]+)")
 
 
 def trailer_crc32(trailer: bytes) -> int | None:
@@ -36,6 +37,29 @@ def trailer_crc32(trailer: bytes) -> int | None:
         return None
     buf = binascii.unhexlify(match.group(1))
     return struct.unpack(">I", buf)[0]  # type: ignore[no-any-return]
+
+
+def check_trailer(trailer: bytes, size: int, crc32: int) -> str | None:
+    """Check decoded data against a yEnc ``=yend`` trailer line.
+
+    Checks ``size`` and the CRC of this part: ``pcrc32`` if given, otherwise
+    ``crc32`` for a single-part post. (In a multi-part post ``crc32`` covers
+    the whole file and can't be checked against one part.)
+
+    Returns:
+        None if the data matches, else a description of the mismatch.
+    """
+    keywords = {
+        key.decode(): value.decode() for key, value in _keyword_re.findall(trailer)
+    }
+    if "size" in keywords and int(keywords["size"]) != size:
+        return f"yEnc size mismatch: trailer {keywords['size']}, decoded {size}"
+    expected = keywords.get("pcrc32")
+    if expected is None and "part" not in keywords:
+        expected = keywords.get("crc32")
+    if expected is not None and int(expected, 16) != crc32 & 0xFFFFFFFF:
+        return f"yEnc CRC mismatch: trailer {expected}, decoded {crc32:08x}"
+    return None
 
 
 class YEnc:

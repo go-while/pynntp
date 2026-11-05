@@ -32,7 +32,7 @@ from . import utils
 from .fifo import BytesFifo
 from .headerdict import HeaderDict
 from .types import SSLMode
-from .yenc import YEnc, trailer_crc32
+from .yenc import YEnc, check_trailer, trailer_crc32
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Mapping
@@ -157,6 +157,16 @@ def _inflate(inflate: zlib._Decompress, data: bytes) -> bytes:
         return inflate.decompress(data)
     except zlib.error:
         raise NNTPDataError("Decompression failed")
+
+
+def _check_yenc(begin: bytes, trailer: bytes, data: bytes, crc32: int) -> None:
+    """Raise NNTPDataError if decoded yEnc data doesn't match its trailer."""
+    if begin and not trailer:
+        raise NNTPDataError("yEnc trailer (=yend) missing")
+    if trailer:
+        error = check_trailer(trailer, len(data), crc32)
+        if error:
+            raise NNTPDataError(error)
 
 
 class BaseNNTPClient:
@@ -1153,16 +1163,22 @@ class NNTPClient(BaseNNTPClient):
 
         return article, msgid
 
-    # TODO: Validate yEnc
     def _body(self, lines: Iterator[bytes], decode: bool | None = None) -> bytes:
+        """Read an article body; decode it if it is yEnc.
+
+        Raises:
+            NNTPDataError: If yEnc data doesn't match the size or CRC in its
+                ``=yend`` trailer. The reply has been read to its end then.
+        """
         decoder = YEnc()
 
         # read the body
         body: list[bytes] = []
+        begin = trailer = b""
         for line in lines:
             # detect yenc
             if decode is None:
-                if line.startswith(b"=y"):
+                if line.startswith(b"=ybegin"):
                     decode = True
                     del body[:]
                 elif line != b"\r\n":
@@ -1170,13 +1186,23 @@ class NNTPClient(BaseNNTPClient):
 
             # decode yenc
             if decode:
-                if line.startswith(b"=y"):
+                if trailer:
+                    continue  # text after =yend is not part of the data
+                if line.startswith(b"=ybegin"):
+                    begin = line
+                    continue
+                if line.startswith(b"=yend"):
+                    trailer = line
+                    continue
+                if line.startswith(b"=ypart"):
                     continue
                 line = decoder.decode(line)
 
             body.append(line)
 
-        return b"".join(body)
+        data = b"".join(body)
+        _check_yenc(begin, trailer, data, decoder.crc32)
+        return data
 
     def article(
         self,
