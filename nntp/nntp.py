@@ -647,23 +647,47 @@ class BaseNNTPClient:
         if self._generating:
             raise NNTPSyncError("Command issued while a generator is active")
 
-        cmd = f"{verb} {args}\r\n" if args else f"{verb}\r\n"
-
-        self.socket.sendall(cmd.encode(self.encoding))
-
         try:
-            code, message = self.status()
+            return self._command_once(verb, args)
         except NNTPTemporaryError as e:
-            if e.code != 480 or self._tls_pending:
+            command = verb.strip().upper()
+            if (
+                e.code != 480
+                or self._tls_pending
+                or not self.username
+                or command == "MODE READER"
+                or command.split(maxsplit=1)[0:1] == ["AUTHINFO"]
+            ):
                 raise
-            code, message = self.command("AUTHINFO USER", self.username)
-            if code == 381:
-                code, message = self.command("AUTHINFO PASS", self.password)
-            if code != 281:
-                raise NNTPReplyError(code, message)
-            code, message = self.command(verb, args)
+            self.login()
+            return self._command_once(verb, args)
 
-        return code, message
+    def _command_once(self, verb: str, args: str | None = None) -> tuple[int, str]:
+        """Send one command without automatic authentication or retries."""
+        cmd = f"{verb} {args}\r\n" if args else f"{verb}\r\n"
+        self.socket.sendall(cmd.encode(self.encoding))
+        return self.status()
+
+    def login(self, username: str | None = None, password: str | None = None) -> None:
+        """Authenticate using AUTHINFO USER/PASS, defaulting to stored credentials.
+
+        Authentication errors propagate without retries. A username is required,
+        and credentials are never sent while a requested STARTTLS is pending.
+        """
+        if self._generating:
+            raise NNTPSyncError("Command issued while a generator is active")
+        if self._tls_pending:
+            raise NNTPError("Cannot authenticate before STARTTLS")
+        username = self.username if username is None else username
+        password = self.password if password is None else password
+        if not username:
+            raise NNTPError("A username is required for authentication")
+        code, message = self._command_once("AUTHINFO USER", username)
+        if code == 381:
+            code, message = self._command_once("AUTHINFO PASS", password)
+        if code != 281:
+            raise NNTPReplyError(code, message)
+        self.username, self.password = username, password
 
     def close(self) -> None:
         """Closes the connection at the client.
@@ -824,9 +848,17 @@ class NNTPClient(BaseNNTPClient):
         See <http://tools.ietf.org/html/rfc3977#section-5.3>
 
         Returns:
-            Boolean value indicating whether posting is allowed or not.
+            Boolean value indicating whether posting is allowed or not. If
+            authentication was required, posting permission is unknown and
+            False is returned without retrying MODE READER after authentication.
         """
-        code, message = self.command("MODE READER")
+        try:
+            code, message = self.command("MODE READER")
+        except NNTPTemporaryError as exc:
+            if exc.code != 480 or self._tls_pending or not self.username:
+                raise
+            self.login()
+            return False
         if code not in (200, 201):
             raise NNTPReplyError(code, message)
 

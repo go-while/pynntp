@@ -236,6 +236,136 @@ def test_starttls_auth_challenge_never_sends_credentials(
     assert server.received == ([] if base else ["MODE READER"]) + ["STARTTLS"]
 
 
+def test_repeated_480_does_not_recurse(scripted_server: Start) -> None:
+    dates = iter([b"480 authenticate\r\n"] * 3 + [b"111 20260102030405\r\n"])
+    server = scripted_server(
+        {
+            "DATE": lambda _line: next(dates),
+            "AUTHINFO USER user": b"381 password required\r\n",
+            "AUTHINFO PASS pass": b"281 accepted\r\n",
+        }
+    )
+    client = server.client(username="user", password="pass")  # noqa: S106
+    with pytest.raises(nntp.NNTPTemporaryError, match="480"):
+        client.date()
+    assert server.received == [
+        "MODE READER",
+        "DATE",
+        "AUTHINFO USER user",
+        "AUTHINFO PASS pass",
+        "DATE",
+    ]
+
+
+def test_480_without_username_sends_no_authinfo(scripted_server: Start) -> None:
+    server = scripted_server({"DATE": b"480 authenticate\r\n"})
+    client = server.client()
+    with pytest.raises(nntp.NNTPTemporaryError, match="480"):
+        client.date()
+    assert server.received == ["MODE READER", "DATE"]
+
+
+def test_login_explicit_and_stored_credentials(scripted_server: Start) -> None:
+    server = scripted_server(
+        {
+            "AUTHINFO USER stored": b"381 password required\r\n",
+            "AUTHINFO PASS secret": b"281 accepted\r\n",
+            "AUTHINFO USER other": b"281 accepted\r\n",
+        }
+    )
+    client = server.client(username="stored", password="secret")  # noqa: S106
+    client.login()
+    client.login("other", "unused")
+    assert server.received == [
+        "MODE READER",
+        "AUTHINFO USER stored",
+        "AUTHINFO PASS secret",
+        "AUTHINFO USER other",
+    ]
+
+
+def test_483_requires_encryption_without_authinfo(scripted_server: Start) -> None:
+    server = scripted_server({"DATE": b"483 encryption required\r\n"})
+    client = server.client(username="user", password="pass")  # noqa: S106
+    with pytest.raises(nntp.NNTPTemporaryError, match="483"):
+        client.date()
+    assert server.received == ["MODE READER", "DATE"]
+
+
+def test_mode_reader_authenticates_without_retry(scripted_server: Start) -> None:
+    server = scripted_server(
+        {
+            "MODE READER": b"480 authenticate\r\n",
+            "AUTHINFO USER user": b"381 password required\r\n",
+            "AUTHINFO PASS pass": b"281 accepted\r\n",
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client(username="user", password="pass")  # noqa: S106
+    assert client.date().year == 2026
+    assert server.received == [
+        "MODE READER",
+        "AUTHINFO USER user",
+        "AUTHINFO PASS pass",
+        "DATE",
+    ]
+
+
+def test_authinfo_challenge_does_not_recurse(scripted_server: Start) -> None:
+    server = scripted_server({"AUTHINFO USER user": b"480 authenticate\r\n"})
+    client = server.client(username="user", password="pass")  # noqa: S106
+    with pytest.raises(nntp.NNTPTemporaryError, match="480"):
+        client.login()
+    assert server.received == ["MODE READER", "AUTHINFO USER user"]
+
+
+def test_authinfo_pass_failure_does_not_retry(scripted_server: Start) -> None:
+    server = scripted_server(
+        {
+            "DATE": b"480 authenticate\r\n",
+            "AUTHINFO USER user": b"381 password required\r\n",
+            "AUTHINFO PASS pass": b"481 rejected\r\n",
+        }
+    )
+    client = server.client(username="user", password="pass")  # noqa: S106
+    with pytest.raises(nntp.NNTPTemporaryError, match="481"):
+        client.date()
+    assert server.received == [
+        "MODE READER",
+        "DATE",
+        "AUTHINFO USER user",
+        "AUTHINFO PASS pass",
+    ]
+
+
+def test_mode_reader_challenge_without_username_does_not_authenticate(
+    scripted_server: Start,
+) -> None:
+    server = scripted_server({"MODE READER": b"480 authenticate\r\n"})
+    with pytest.raises(nntp.NNTPTemporaryError, match="480"):
+        server.client()
+    assert server.received == ["MODE READER"]
+
+
+def test_login_without_username_fails_locally(scripted_server: Start) -> None:
+    server = scripted_server()
+    client = server.client()
+    with pytest.raises(nntp.NNTPError, match="username"):
+        client.login()
+    assert server.received == ["MODE READER"]
+
+
+def test_login_does_not_interrupt_active_reply(scripted_server: Start) -> None:
+    server = scripted_server({"CAPABILITIES": b"101 caps\r\nVERSION 2\r\n.\r\n"})
+    client = server.client(username="user", password="pass")  # noqa: S106
+    capabilities = client.capabilities()
+    assert next(capabilities) == "VERSION 2"
+    with pytest.raises(nntp.nntp.NNTPSyncError):
+        client.login()
+    assert server.received == ["MODE READER", "CAPABILITIES"]
+    assert list(capabilities) == []
+
+
 def test_exception_closes_without_quit(scripted_server: Start) -> None:
     server = scripted_server()
     with pytest.raises(ValueError, match="user exception"), server.client() as client:
