@@ -102,8 +102,8 @@ def parse_newsgroup(line: str) -> Newsgroup:
     parts = line.split()
     try:
         name = parts[0]
-        low = int(parts[1])
-        high = int(parts[2])
+        high = int(parts[1])
+        low = int(parts[2])
         status = parts[3]
     except (IndexError, ValueError):
         raise ValueError("Invalid newsgroup info")
