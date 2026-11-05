@@ -622,7 +622,8 @@ class NNTPClient(BaseNNTPClient):
                     if not self._generating:
                         self.quit()
             finally:
-                self.close()
+                with contextlib.suppress(OSError):
+                    self.close()
         return False
 
     # session administration commands
