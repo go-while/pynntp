@@ -18,6 +18,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 from __future__ import annotations
 
+import contextlib
 import io
 import os
 import socket
@@ -610,11 +611,14 @@ class NNTPClient(BaseNNTPClient):
         exc_tb: TracebackType | None,
     ) -> Literal[False]:
         """Support for the 'with' context manager statement."""
-        try:
-            self.quit()
-        except NNTPError:
+        if exc_type is not None:
+            # Do not replace the exception raised by the user's block.
+            with contextlib.suppress(OSError):
+                self.close()
+        elif self._generating:
             self.close()
-            raise
+        else:
+            self.quit()
         return False
 
     # session administration commands
@@ -675,11 +679,14 @@ class NNTPClient(BaseNNTPClient):
 
         See <http://tools.ietf.org/html/rfc3977#section-5.4>
         """
-        code, message = self.command("QUIT")
-        if code != 205:
-            raise NNTPReplyError(code, message)
-
-        self.socket.close()
+        if self.socket.fileno() == -1:
+            return
+        try:
+            code, message = self.command("QUIT")
+            if code != 205:
+                raise NNTPReplyError(code, message)
+        finally:
+            self.close()
 
     # information commands
     def date(self) -> datetime:
