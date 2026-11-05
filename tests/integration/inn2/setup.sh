@@ -46,9 +46,10 @@ if grep -q '^peer ME' $ETC/incoming.conf; then
     sed -i '/^peer ME/,/^}/ s/^/#pynntp# /' $ETC/incoming.conf
 fi
 
-# NEWNEWS for localhost readers: readers.conf needs the N permission;
-# inn.conf's allownewnews alone isn't enough (found by pynntp-sol).
-sed -i '/^access "localhost"/,/^}/ s/^\(\s*access:\s*\)RPA\s*$/\1RPAN/' $ETC/readers.conf
+# NEWNEWS and IHAVE for localhost readers: readers.conf needs the N and I
+# permissions; inn.conf's allownewnews alone isn't enough (found by pynntp-sol).
+# IHAVE through nnrpd keeps localhost a reader (STARTTLS must reach nnrpd).
+sed -i '/^access "localhost"/,/^}/ s/^\(\s*access:\s*\)RPAN\?I\?\s*$/\1RPANI/' $ETC/readers.conf
 
 # TLS for nnrpd: self-signed certificate.
 if [ ! -f $ETC/pynntp-cert.pem ]; then
