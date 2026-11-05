@@ -53,9 +53,20 @@ with nntp.NNTPClient("news.example.com", 563, "user", "password", use_ssl=True) 
     print(message_id)  # the Message-ID the server reports, or True
 ```
 
-Leaving a loop over a reply early is fine: the rest of the reply is read and
-dropped before the next command. Errors from the server raise subclasses of
-`nntp.NNTPError`.
+One reply is read at a time. Leaving a `for` loop over a reply early is fine:
+once nothing refers to the reply any more, the rest of it is read and dropped
+before the next command. A reply you still hold in a variable counts as being
+read, so the next command raises `NNTPSyncError` until you finish it, call its
+`close()` or drop it:
+
+```python
+groups = client.list_active()
+first_group = next(groups)
+groups.close()  # or: del groups; or read it to the end
+client.date()
+```
+
+Errors from the server raise subclasses of `nntp.NNTPError`.
 
 ## Supported Commands
 
