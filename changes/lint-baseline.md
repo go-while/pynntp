@@ -1,0 +1,1 @@
+Changed: Updated the LIST HEADERS annotation and documented HeaderDict's intentional unhashability for current Ruff checks, following Christian Clauss (cclauss)'s fixes in upstream PR #101. Runtime behavior is unchanged.
