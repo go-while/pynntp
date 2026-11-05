@@ -371,3 +371,133 @@ def test_header_invalid_identifier_is_drained(
     with pytest.raises(nntp.NNTPDataError, match="Invalid"):
         list(getattr(client, verb.lower())("Subject", selector))
     assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("verb", ["XOVER", "XZVER"])
+@pytest.mark.parametrize("suffix", ["full", "FULL", "FuLl"])
+def test_overview_full_fields_and_empty_values(
+    scripted_server: Start, verb: str, suffix: str
+) -> None:
+    text = (
+        b"1\tsubject\tXrEf: host local.test:1  \r\n2\tsecond\t\r\n3\tthird\tXref:\r\n"
+    )
+    block = _yenczlib_headers(text) if verb == "XZVER" else text + b".\r\n"
+    server = scripted_server(
+        {
+            "LIST OVERVIEW.FMT": (
+                f"215 format\r\nSubject:\r\nXref:{suffix}\r\n.\r\n".encode()
+            ),
+            verb: b"224 overview\r\n" + block,
+        }
+    )
+    client = server.client()
+    assert client.overview_fmt == ("Subject", "Xref")
+    entries = list(getattr(client, verb.lower())((1, 3)))
+    assert [(number, fields["Xref"]) for number, fields in entries] == [
+        (1, "host local.test:1  "),
+        (2, ""),
+        (3, ""),
+    ]
+    assert entries[0][1]["Subject"] == "subject"
+    assert server.received.count("LIST OVERVIEW.FMT") == 1
+
+
+@pytest.mark.parametrize("value", ["Other: host", "missing-label"])
+@pytest.mark.parametrize("verb", ["XOVER", "XZVER"])
+def test_overview_nonconforming_full_field_is_preserved(
+    scripted_server: Start, value: str, verb: str
+) -> None:
+    text = f"1\t{value}\r\n2\tXref: host\r\n".encode()
+    block = _yenczlib_headers(text) if verb == "XZVER" else text + b".\r\n"
+    server = scripted_server(
+        {
+            "LIST OVERVIEW.FMT": b"215 format\r\nXref:full\r\n.\r\n",
+            verb: b"224 overview\r\n" + block,
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client()
+    entries = list(getattr(client, verb.lower())((1, 2)))
+    assert [(number, fields["Xref"]) for number, fields in entries] == [
+        (1, value),
+        (2, "host"),
+    ]
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+def test_overview_manual_format_does_not_request_metadata(
+    scripted_server: Start,
+) -> None:
+    server = scripted_server({"XOVER": b"224 overview\r\n1\tsubject\r\n.\r\n"})
+    client = server.client()
+    client.overview_fmt = ("Subject",)
+    entries = list(client.xover(1))
+    assert entries[0][1]["Subject"] == "subject"
+    assert server.received == ["MODE READER", "XOVER 1"]
+
+
+def test_overview_format_fallback(scripted_server: Start) -> None:
+    server = scripted_server(
+        {
+            "LIST OVERVIEW.FMT": b"500 unknown\r\n",
+            "XOVER": b"224 overview\r\n1\tsubject\tfrom\tdate\t<a@b>\t\t10\t1\r\n.\r\n",
+        }
+    )
+    client = server.client()
+    entries = list(client.xover(1))
+    assert entries[0][1]["Subject"] == "subject"
+    assert entries[0][1]["References"] == ""
+    assert entries[0][1]["Lines"] == "1"
+
+
+@pytest.mark.parametrize(
+    "timestamp", ["not-a-date", "20261301000000", "20260101000060"]
+)
+def test_invalid_date_raises_data_error(scripted_server: Start, timestamp: str) -> None:
+    replies = iter([f"111 {timestamp}\r\n".encode(), b"111 20260102030405\r\n"])
+    server = scripted_server({"DATE": lambda _line: next(replies)})
+    client = server.client()
+    with pytest.raises(nntp.NNTPDataError, match="DATE"):
+        client.date()
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("verb", ["LIST ACTIVE", "NEWGROUPS"])
+@pytest.mark.parametrize("line", [b"missing-fields", b"local.test NaN 1 y"])
+def test_invalid_newsgroup_raises_data_error(
+    scripted_server: Start, verb: str, line: bytes
+) -> None:
+    code = 215 if verb == "LIST ACTIVE" else 231
+    server = scripted_server(
+        {
+            verb: f"{code} groups\r\n".encode() + line + b"\r\nlocal.ok 2 1 y\r\n.\r\n",
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client()
+    groups = (
+        client.list_active()
+        if verb == "LIST ACTIVE"
+        else client.newgroups(datetime(2026, 1, 1, tzinfo=timezone.utc))
+    )
+    with pytest.raises(nntp.NNTPDataError, match="newsgroup"):
+        list(groups)
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+def test_list_extensions_legacy_success(scripted_server: Start) -> None:
+    server = scripted_server(
+        {"LIST EXTENSIONS": b"202 extensions\r\nHDR\r\nOVER\r\n.\r\n"}
+    )
+    assert list(server.client().list_extensions()) == ["HDR", "OVER"]
+
+
+def test_list_extensions_unsupported_propagates(scripted_server: Start) -> None:
+    server = scripted_server(
+        {"LIST EXTENSIONS": b"501 not supported\r\n", "DATE": b"111 20260102030405\r\n"}
+    )
+    client = server.client()
+    with pytest.raises(nntp.NNTPPermanentError) as error:
+        list(client.list_extensions())
+    assert error.value.code == 501
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
