@@ -249,9 +249,9 @@ def test_new_commands_use_gmt(
     assert server.received == ["MODE READER", command]
 
 
-def _yenczlib_headers() -> bytes:
+def _yenczlib_headers(text: bytes = b"1 subject\r\n") -> bytes:
     deflate = zlib.compressobj(wbits=-15)
-    compressed = deflate.compress(b"1 subject\r\n") + deflate.flush()
+    compressed = deflate.compress(text) + deflate.flush()
     encoded = bytearray()
     for byte in compressed:
         byte = (byte + 42) & 0xFF
@@ -308,4 +308,66 @@ def test_header_command_wrong_code_drained(scripted_server: Start, verb: str) ->
     with pytest.raises(nntp.NNTPReplyError) as error:
         list(reply)
     assert error.value.code == code
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("verb", ["HDR", "XHDR", "XZHDR"])
+def test_header_values_strip_only_crlf(scripted_server: Start, verb: str) -> None:
+    code = 225 if verb == "HDR" else 221
+    text = b"1 subject  \t\r\n2 \r\n3\t\r\n"
+    block = _yenczlib_headers(text) if verb == "XZHDR" else text + b".\r\n"
+    server = scripted_server({verb: f"{code} headers\r\n".encode() + block})
+    client = server.client()
+    assert list(getattr(client, verb.lower())("Subject", (1, 3))) == [
+        (1, "subject  \t"),
+        (2, ""),
+        (3, ""),
+    ]
+
+
+@pytest.mark.parametrize("verb", ["HDR", "XHDR", "XZHDR"])
+def test_header_message_id_uses_zero(scripted_server: Start, verb: str) -> None:
+    code = 225 if verb == "HDR" else 221
+    key = "0" if verb == "HDR" else "<a@b>"
+    text = f"{key} subject\r\n".encode()
+    block = _yenczlib_headers(text) if verb == "XZHDR" else text + b".\r\n"
+    server = scripted_server(
+        {
+            f"{verb} Subject <a@b>": f"{code} headers\r\n".encode() + block,
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client()
+    assert list(getattr(client, verb.lower())("Subject", "<a@b>")) == [(0, "subject")]
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
+    ("verb", "selector", "key"),
+    [
+        ("XHDR", 1, "<a@b>"),
+        ("XHDR", "<a@b>", "<other@b>"),
+        ("XZHDR", 1, "<a@b>"),
+        ("XZHDR", "<a@b>", "<other@b>"),
+        ("HDR", "<a@b>", "<a@b>"),
+        ("XHDR", 1, "not-a-number"),
+        ("HDR", 1, "not-a-number"),
+        ("XZHDR", 1, "not-a-number"),
+    ],
+)
+def test_header_invalid_identifier_is_drained(
+    scripted_server: Start, verb: str, selector: str | int, key: str
+) -> None:
+    code = 225 if verb == "HDR" else 221
+    text = f"{key} subject\r\n2 remaining\r\n".encode()
+    block = _yenczlib_headers(text) if verb == "XZHDR" else text + b".\r\n"
+    server = scripted_server(
+        {
+            verb: f"{code} headers\r\n".encode() + block,
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client()
+    with pytest.raises(nntp.NNTPDataError, match="Invalid"):
+        list(getattr(client, verb.lower())("Subject", selector))
     assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)

@@ -1355,6 +1355,13 @@ class NNTPClient(BaseNNTPClient):
         args = header
         if msgid_range is not None:
             args += " " + utils.unparse_msgid_range(msgid_range)
+        requested_id = (
+            msgid_range
+            if verb in ("XHDR", "XZHDR")
+            and isinstance(msgid_range, str)
+            and re.fullmatch(r"<[^<>\s]+>", msgid_range)
+            else None
+        )
 
         code, message = self.command(verb, args)
         success = 225 if verb == "HDR" else 221
@@ -1363,12 +1370,12 @@ class NNTPClient(BaseNNTPClient):
 
         yz = verb == "XZHDR"
         for line in self.info(code, message, yz=yz):
-            parts = line.split(None, 1)
+            parts = line.rstrip("\r\n").split(None, 1)
             try:
-                articleno = int(parts[0])
+                articleno = 0 if parts[0] == requested_id else int(parts[0])
                 value = parts[1] if len(parts) > 1 else ""
             except (IndexError, ValueError):
-                raise NNTPDataError("Invalid XHDR response")
+                raise NNTPDataError(f"Invalid {verb} response")
             yield articleno, value
 
     def hdr(
@@ -1409,7 +1416,9 @@ class NNTPClient(BaseNNTPClient):
     ) -> Iterator[tuple[int, str]]:
         """Generator for the XHDR command.
 
-        See hdr_gen()
+        See hdr(). Values exclude their wire CRLF terminators. For a message-id
+        request, an echoed matching identifier is returned as article number 0,
+        like HDR. Numeric article selectors retain their server article numbers.
         """
         return self._hdr(header, msgid_range, verb="XHDR")
 
@@ -1421,6 +1430,9 @@ class NNTPClient(BaseNNTPClient):
         """Generator for the XZHDR command.
 
         The compressed version of XHDR. See xhdr().
+
+        A matching echoed message-id is returned as article number 0; values
+        exclude their wire CRLF terminators, as in hdr() and xhdr().
         """
         return self._hdr(header, msgid_range, verb="XZHDR")
 
