@@ -400,19 +400,25 @@ def test_overview_full_fields_and_empty_values(
 
 
 @pytest.mark.parametrize("value", ["Other: host", "missing-label"])
-def test_overview_invalid_full_field_is_drained(
-    scripted_server: Start, value: str
+@pytest.mark.parametrize("verb", ["XOVER", "XZVER"])
+def test_overview_nonconforming_full_field_is_preserved(
+    scripted_server: Start, value: str, verb: str
 ) -> None:
+    text = f"1\t{value}\r\n2\tXref: host\r\n".encode()
+    block = _yenczlib_headers(text) if verb == "XZVER" else text + b".\r\n"
     server = scripted_server(
         {
             "LIST OVERVIEW.FMT": b"215 format\r\nXref:full\r\n.\r\n",
-            "XOVER": f"224 overview\r\n1\t{value}\r\n2\tXref: host\r\n.\r\n".encode(),
+            verb: b"224 overview\r\n" + block,
             "DATE": b"111 20260102030405\r\n",
         }
     )
     client = server.client()
-    with pytest.raises(nntp.NNTPDataError, match="Invalid XOVER"):
-        list(client.xover((1, 2)))
+    entries = list(getattr(client, verb.lower())((1, 2)))
+    assert [(number, fields["Xref"]) for number, fields in entries] == [
+        (1, value),
+        (2, "host"),
+    ]
     assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 
 

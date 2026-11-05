@@ -1519,10 +1519,9 @@ class NNTPClient(BaseNNTPClient):
                 fields = []
                 for name, value in zip(fmt, parts[1:], strict=False):
                     if name.casefold() in full_fields and value:
-                        label, colon, value = value.partition(":")
-                        if not colon or label.casefold() != name.casefold():
-                            raise ValueError("Invalid full overview field")
-                        value = value.lstrip(" \t")
+                        label, colon, content = value.partition(":")
+                        if colon and label.casefold() == name.casefold():
+                            value = content.lstrip(" \t")
                     fields.append((name, value))
                 overview = HeaderDict(fields)
             except (IndexError, ValueError):
