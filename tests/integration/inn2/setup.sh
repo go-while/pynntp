@@ -77,9 +77,13 @@ for g in local.general local.test; do
 done
 
 # nnrpd with implicit TLS on 563, as a daemon (not managed by systemd).
-if ! ss -ltn | grep -q ':563 '; then
-    /usr/lib/news/bin/nnrpd -D -p 563 -S
-fi
+# Restart it on every run: it reads inn.conf only at startup, and it names
+# itself "nnrpd: accepting connections", so find it by its port.
+for pid in $(ss -ltnpH 'sport = :563' | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u); do
+    kill "$pid" 2>/dev/null || true
+done
+sleep 1
+/usr/lib/news/bin/nnrpd -D -p 563 -S
 
 # Test runner venv, for test machines without one.
 if [ "${PYNNTP_VENV:-0}" = 1 ] && [ ! -x /root/pynntp-venv/bin/pytest ]; then
