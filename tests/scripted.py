@@ -24,13 +24,14 @@ from __future__ import annotations
 import contextlib
 import socket
 import threading
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, BinaryIO, Callable, Union
+from typing import TYPE_CHECKING, BinaryIO, TypeAlias
 
 import nntp
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Mapping
 
 
 @dataclass(frozen=True)
@@ -47,8 +48,10 @@ class _Close:
 
 CLOSE = _Close()
 
-Step = Union[bytes, float]
-Reply = Union[bytes, "Sequence[Step]", ReadArticle, _Close, Callable[[str], "Reply"]]
+Step: TypeAlias = bytes | float
+Reply: TypeAlias = (
+    bytes | Sequence[Step] | ReadArticle | _Close | Callable[[str], "Reply"]
+)
 
 DEFAULT_SCRIPT: dict[str, Reply] = {
     "MODE READER": b"200 reader ready\r\n",
