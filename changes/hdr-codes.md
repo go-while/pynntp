@@ -1,1 +1,0 @@
-Fixed: HDR now accepts its RFC 3977 success code `225`; XHDR, XZHDR and XPAT continue to require `221`. Unexpected multi-line successes are drained before raising `NNTPReplyError`, keeping the next command synchronized.

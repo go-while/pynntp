@@ -1,2 +1,0 @@
-Changed: Iterator-returning command methods send their command and read its status at call time, rather than waiting for the first iteration. Reply data is still streamed and return annotations remain `Iterator[...]`; command/status errors now arise at the call.
-Changed: A returned, unread iterator blocks subsequent commands with `NNTPSyncError` until consumed, closed or dropped. Closing a command iterator drains it even before its first iteration; parser errors release the reply even when their traceback is retained.

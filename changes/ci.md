@@ -1,1 +1,0 @@
-Changed: CI runs on develop-* and fix/** branches as well, against INN from the Ubuntu inn2 package (set up by tests/integration/inn2/setup.sh) instead of the greenbender/inn image, with a separate lint/type job.

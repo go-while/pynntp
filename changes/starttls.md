@@ -1,1 +1,0 @@
-Fixed: Reader mode is requested before STARTTLS without sending credentials in plaintext, and buffered plaintext after a successful STARTTLS response is discarded before TLS negotiation. A pre-TLS MODE READER requiring authentication or encryption is not retried after TLS.

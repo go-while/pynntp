@@ -5,7 +5,7 @@
 > image (INN 2.7.2), or against the small scripted server in `review/probes/fake_server.py`. The rest
 > come from reading the code. Line numbers refer to upstream `main` at 82b9b2b.
 
-## Status on develop-01 (2026-11-05)
+## Status on develop-01 (2026-11-05, release candidate 3.0.0)
 
 Fixed on the fork's `develop-01` branch, each with offline regression tests against a scripted server and,
 where possible, tests against INN 2.6.4 and 2.7.4. Every change was reviewed and verified by two other agents
@@ -16,12 +16,12 @@ before it was merged. The merge commits are in `git log --first-parent develop-0
 | Bug 1: dot-unstuffing (#99), plus gzip replies read to their end | fixed | 56f765e |
 | Bug 2: LIST ACTIVE / NEWGROUPS high and low | fixed | 387c249 |
 | Bug 3: NEWGROUPS / NEWNEWS send `GMT` | fixed | e0e48f6 |
-| Bug 4: HDR expects 225; an unexpected multi-line success code is drained for HDR/XHDR/XZHDR/XPAT and, since C8, XOVER/XZVER/OVER/LISTGROUP/STAT | fixed for those; the other commands are open in C9 | c4c81ef, 9799bbf |
+| Bug 4: HDR expects 225; unexpected multi-line success codes drained for every command | fixed | c4c81ef, 9799bbf, c5b5936, a4e4f41, e97af1f |
 | Bug 5: abandoned or failed replies lock the client | fixed | 1b5c877 |
 | Bug 6: `close()` / `quit()` / `__exit__` | fixed | 64acff4 |
 | Bug 7: MODE READER before STARTTLS, buffer cleared, no AUTHINFO before TLS | fixed (CAPABILITIES re-read deferred) | 53f273d |
 | Bug 8: CR/LF injection in headers | fixed | 7f1ea38 |
-| Bug 8: CR/LF injection in command arguments | open (B5) | |
+| Bug 8: CR/LF/NUL injection in command arguments and credentials | fixed | c5b5936 |
 | Bugs 9, 10: POST truncation, Message-ID from 240 | fixed | ee9af71 |
 | Bug 11: AUTHINFO: no recursion, no bare AUTHINFO USER, no MODE READER after auth, 483 passed through, explicit `login()` | fixed | 49de4af |
 | Bug 12: XHDR values and message-id form | fixed | 3fd109e |
@@ -35,9 +35,13 @@ before it was merged. The merge commits are in `git log --first-parent develop-0
 | Packaging: PEP 621, Python >= 3.10, `py.typed`, tests in the sdist (#74), refreshed lock | done | 347c2a1, 2387beb |
 | CI: lint + Python 3.10-3.14 against Ubuntu's inn2 on every work branch | done | 9947800 |
 | README example and command list | fixed | f1a67ba |
+| Low: `PYNNTP_TLS_INSECURE=0`, `ssl_context`, timeouts as `NNTPError`, `NNTPSyncError` export, `NNTPProtocolError` from bytes | fixed | e97af1f, 7cb774c, 96ba1b9, 2bc177c |
+| Low: `__main__` demo block | removed | d49534c |
+| Low: generator methods send their command only on the first `next()` | fixed (sent at call time) | b58798d, 2bc177c |
+| Missing: IHAVE (#42) | added | 4cf37b8 |
 
-Still open: B5 (command arguments), B6 (TLS options, timeouts as `NNTPError`, exports), C9 (unexpected codes
-everywhere), the `__main__` demo block, the publish workflow, COMPRESS DEFLATE (#41), IHAVE (#42).
+Still open: CAPABILITIES are not re-read after TLS or authentication (no capability cache yet), the publish
+workflow, COMPRESS DEFLATE (#41), AUTHINFO SASL, repeated headers and RFC 2047 decoding.
 
 ## Summary
 
