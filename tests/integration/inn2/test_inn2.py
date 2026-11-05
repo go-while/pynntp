@@ -41,7 +41,6 @@ def test_context_manager() -> None:
         assert newsgroups == DEFAULT_NEWGROUPS
 
 
-@pytest.mark.xfail(reason="[Errno 9] Bad file descriptor", raises=OSError, strict=True)
 def test_context_manager_on_close() -> None:
     """
     nntp_client.close() should normally not be called within the context manager.
@@ -52,7 +51,6 @@ def test_context_manager_on_close() -> None:
         nntp_client.close()
 
 
-@pytest.mark.xfail(reason="[Errno 9] Bad file descriptor", raises=OSError, strict=True)
 def test_context_manager_on_quit() -> None:
     """
     nntp_client.quit() should normally not be called within the context manager.

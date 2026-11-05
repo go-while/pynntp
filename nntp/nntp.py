@@ -18,6 +18,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 from __future__ import annotations
 
+import contextlib
 import io
 import os
 import socket
@@ -739,11 +740,19 @@ class NNTPClient(BaseNNTPClient):
         exc_tb: TracebackType | None,
     ) -> Literal[False]:
         """Support for the 'with' context manager statement."""
-        try:
-            self.quit()
-        except NNTPError:
-            self.close()
-            raise
+        if exc_type is not None:
+            # Do not replace the exception raised by the user's block.
+            with contextlib.suppress(OSError):
+                self.close()
+        else:
+            try:
+                # Shutdown errors must not turn a successful block into failure.
+                with contextlib.suppress(NNTPError, OSError):
+                    if not self._generating:
+                        self.quit()
+            finally:
+                with contextlib.suppress(OSError):
+                    self.close()
         return False
 
     # session administration commands
@@ -796,19 +805,23 @@ class NNTPClient(BaseNNTPClient):
 
         Tells the server to close the connection. After the server acknowledges
         the request to quit the connection is closed both at the server and
-        client. Only useful for graceful shutdown. If you are in a generator
-        use close() instead.
+        client. Only useful for graceful shutdown. The socket is also closed if
+        QUIT fails. An active generator prevents QUIT and raises NNTPSyncError;
+        use close() instead when a reply is still being read.
 
         Once this method has been called, no other methods of the NNTPClient
         object should be called.
 
         See <http://tools.ietf.org/html/rfc3977#section-5.4>
         """
-        code, message = self.command("QUIT")
-        if code != 205:
-            raise NNTPReplyError(code, message)
-
-        self.socket.close()
+        if self.socket.fileno() == -1:
+            return
+        try:
+            code, message = self.command("QUIT")
+            if code != 205:
+                raise NNTPReplyError(code, message)
+        finally:
+            self.close()
 
     # information commands
     def date(self) -> datetime:
