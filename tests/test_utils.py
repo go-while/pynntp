@@ -11,6 +11,7 @@ from nntp.utils import (
     parse_epoch,
     parse_headers,
     parse_newsgroup,
+    unparse_headers,
     unparse_msgid_range,
     unparse_range,
 )
@@ -107,6 +108,30 @@ def test_parse_headers_invalid() -> None:
         parse_headers("\twith continuation")
     with pytest.raises(ValueError, match="not enough values to unpack"):
         parse_headers("Invalid header")
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("Subject\r\nX-Injected", "yes"),
+        ("Subject\rX-Injected", "yes"),
+        ("Subject\nX-Injected", "yes"),
+        ("Subject", "safe\r\nX-Injected: yes"),
+        ("Subject", "safe\rX-Injected: yes"),
+        ("Subject", "safe\nX-Injected: yes"),
+        ("Subject", "safe\r\n\tfolded"),
+    ],
+)
+def test_unparse_headers_rejects_newlines(name: str, value: str) -> None:
+    with pytest.raises(ValueError, match="CR or LF"):
+        unparse_headers({"X-Safe": "first", name: value})
+
+
+def test_unparse_headers_valid() -> None:
+    assert unparse_headers({}) == "\r\n"
+    assert unparse_headers({"Subject": "café:  text\tvalue", "X-Empty": ""}) == (
+        "Subject: café:  text\tvalue\r\nX-Empty: \r\n\r\n"
+    )
 
 
 @pytest.mark.parametrize(

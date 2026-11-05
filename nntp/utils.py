@@ -175,6 +175,8 @@ def _unparse_header(name: str, value: str) -> str:
     Returns:
         The header as a string.
     """
+    if "\r" in name or "\n" in name or "\r" in value or "\n" in value:
+        raise ValueError("Header names and values must not contain CR or LF")
     return f"{name}: {value}" + "\r\n"
 
 
@@ -186,6 +188,10 @@ def unparse_headers(hdrs: Mapping[str, str]) -> str:
 
     Returns:
         The headers as a string that can be used in an NNTP POST.
+
+    Raises:
+        ValueError: If a header name or value contains CR or LF. Values must
+            be unfolded before serialization.
     """
     return "".join([_unparse_header(n, v) for n, v in hdrs.items()]) + "\r\n"
 

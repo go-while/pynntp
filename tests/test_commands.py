@@ -119,6 +119,30 @@ def test_post_header_encoding_error_sends_nothing(scripted_server: Start) -> Non
     assert server.articles == []
 
 
+@pytest.mark.parametrize("newline", ["\r", "\n", "\r\n"])
+@pytest.mark.parametrize("inject_name", [False, True])
+def test_post_header_injection_sends_nothing(
+    scripted_server: Start, newline: str, *, inject_name: bool
+) -> None:
+    headers = {"Subject": "safe"}
+    if inject_name:
+        headers[f"X-Bad{newline}X-Injected"] = "yes"
+    else:
+        headers["X-Bad"] = f"safe{newline}X-Injected: yes"
+    server = scripted_server(
+        {
+            "POST": ReadArticle(b"340 send article\r\n", b"240 accepted\r\n"),
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client()
+    with pytest.raises(ValueError, match="CR or LF"):
+        client.post(headers, b"body")
+    assert server.received == ["MODE READER"]
+    assert server.articles == []
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
 @pytest.mark.parametrize(
     "body",
     [

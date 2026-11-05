@@ -1,0 +1,1 @@
+Fixed: Header serialization rejects CR and LF in header names and values with `ValueError`, preventing injected headers or article terminators. POST rejects these headers before sending anything; callers must unfold pre-folded header values first.
