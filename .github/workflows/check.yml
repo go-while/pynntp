@@ -1,39 +1,54 @@
-# This workflow will install Python dependencies, do type checking, and
-# run tests with a variety of Python versions.
+# Lint, type checks, and the tests: offline ones against the scripted server,
+# integration ones against INN from the Ubuntu package on the runner.
 
 name: Check
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "develop-*", "fix/**", "feat/**"]
   pull_request:
-    branches: ["main"]
+    branches: ["main", "develop-*"]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install --quiet mypy pytest ruff
+      - name: ruff
+        run: ruff check nntp tests
+      - name: ruff format
+        run: ruff format --check nntp tests
+      - name: mypy
+        run: mypy --strict nntp tests
+
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
-    services:
-      inn-service:
-        image: greenbender/inn
-        ports:
-          - 119:119
-          - 563:563
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
-      - run: pipx install poetry
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           allow-prereleases: true
-          cache: poetry
-      - name: Install dependencies
-        run: poetry install
-      - name: Run mypy
-        run: poetry run mypy --strict .
-      - name: Run tests
-        run: poetry run pytest
+      - run: python -m pip install --quiet pytest
+      - name: Offline tests (scripted server)
+        run: python -m pytest -q -W error::ResourceWarning tests --ignore=tests/integration
+        env:
+          PYTHONPATH: .
+      - name: Set up INN (Ubuntu inn2 package)
+        run: sudo sh tests/integration/inn2/setup.sh
+      - name: Integration tests (INN on localhost)
+        run: python -m pytest -q -rfE tests/integration
+        env:
+          PYTHONPATH: .
