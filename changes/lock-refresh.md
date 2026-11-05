@@ -1,0 +1,1 @@
+Changed: development and docs dependencies in poetry.lock updated (pytest 9, urllib3, requests, jinja2, virtualenv and others), which clears the Dependabot security alerts; pynntp itself still has no runtime dependencies.
