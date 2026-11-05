@@ -1333,8 +1333,9 @@ class NNTPClient(BaseNNTPClient):
             args += " " + utils.unparse_msgid_range(msgid_range)
 
         code, message = self.command(verb, args)
-        if code != 221:
-            raise NNTPReplyError(code, message)
+        success = 225 if verb == "HDR" else 221
+        if code != success:
+            raise self._unexpected(code, message)
 
         yz = verb == "XZHDR"
         for line in self.info(code, message, yz=yz):
@@ -1512,7 +1513,7 @@ class NNTPClient(BaseNNTPClient):
 
         code, message = self.command("XPAT", args)
         if code != 221:
-            raise NNTPReplyError(code, message)
+            raise self._unexpected(code, message)
 
         for line in self.info(code, message):
             yield line.strip()
