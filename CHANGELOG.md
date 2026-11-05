@@ -79,11 +79,12 @@ section before upgrading.
 - HDR expected code 221 instead of RFC 3977's 225.
 - Leaving a reply early (`break`, a single `next()`, an exception or a parse
   error) locked the client up; every later command raised `NNTPSyncError`.
-- An unexpected multi-line success code (one of 100, 101, 215, 220-225, 230,
-  231) to a command whose reply is multi-line left that reply on the
-  connection, so the next command read stale data; it is now read and dropped
-  first. (211 and the obsolete 202 are not treated as multi-line, and the
-  single-line session commands such as AUTHINFO don't drain yet.)
+- An unexpected multi-line success code (one of 100, 101, 215, 220, 221, 222,
+  224, 225, 230, 231) to a command whose reply is multi-line left that reply
+  on the connection, so the next command read stale data; it is now read and
+  dropped first. (An unexpected 211 or 202 is not drained automatically, as
+  they aren't multi-line for every command; the single-line session commands
+  such as AUTHINFO don't drain yet.)
 - `close()` and `quit()` can be called more than once; a `with` block closes the
   socket even if QUIT fails, and doesn't replace the block's own exception.
 - Sockets leaked when the greeting, TLS or MODE READER failed during setup.
