@@ -905,7 +905,7 @@ class NNTPClient(BaseNNTPClient):
         """
         code, message = self.command("DATE")
         if code != 111:
-            raise NNTPReplyError(code, message)
+            raise self._unexpected(code, message)
 
         try:
             return utils.parse_date(message)
@@ -925,7 +925,7 @@ class NNTPClient(BaseNNTPClient):
         """
         code, message = self.command("HELP")
         if code != 100:
-            raise NNTPReplyError(code, message)
+            raise self._unexpected(code, message)
 
         return "".join(self.info(code, message))
 
@@ -951,7 +951,7 @@ class NNTPClient(BaseNNTPClient):
 
         code, message = self.command("NEWGROUPS", args)
         if code != 231:
-            raise NNTPReplyError(code, message)
+            raise self._unexpected(code, message)
 
         for line in self.info(code, message):
             try:
@@ -984,7 +984,7 @@ class NNTPClient(BaseNNTPClient):
 
         code, message = self.command("NEWNEWS", args)
         if code != 230:
-            raise NNTPReplyError(code, message)
+            raise self._unexpected(code, message)
 
         for line in self.info(code, message):
             yield line.strip()
@@ -1019,7 +1019,7 @@ class NNTPClient(BaseNNTPClient):
 
         code, message = self.command(cmd, args)
         if code not in success:
-            raise NNTPReplyError(code, message)
+            raise self._unexpected(code, message)
 
         return self.info(code, message)
 
@@ -1175,7 +1175,7 @@ class NNTPClient(BaseNNTPClient):
 
         code, message = self.command("GROUP", args)
         if code != 211:
-            raise NNTPReplyError(code, message)
+            raise self._unexpected(code, message)
 
         parts = message.split(None, 4)
         try:
@@ -1245,7 +1245,7 @@ class NNTPClient(BaseNNTPClient):
         """
         code, message = self.command("NEXT")
         if code != 223:
-            raise NNTPReplyError(code, message)
+            raise self._unexpected(code, message)
 
         parts = message.split(None, 3)
         try:
@@ -1273,7 +1273,7 @@ class NNTPClient(BaseNNTPClient):
         """
         code, message = self.command("LAST")
         if code != 223:
-            raise NNTPReplyError(code, message)
+            raise self._unexpected(code, message)
 
         parts = message.split(None, 3)
         try:
@@ -1734,7 +1734,7 @@ class NNTPClient(BaseNNTPClient):
 
         code, message = self.command("XFEATURE COMPRESS GZIP", args)
         if code != 290:
-            raise NNTPReplyError(code, message)
+            raise self._unexpected(code, message)
 
         return True
 
@@ -1806,7 +1806,7 @@ class NNTPClient(BaseNNTPClient):
 
             code, message = self.command("POST")
             if code != 340:
-                raise NNTPReplyError(code, message)
+                raise self._unexpected(code, message)
             while chunk := article.read(65536):
                 self.socket.sendall(chunk)
 
@@ -1815,7 +1815,7 @@ class NNTPClient(BaseNNTPClient):
 
         # check status
         if code != 240:
-            raise NNTPReplyError(code, message)
+            raise self._unexpected(code, message)
 
         # return message-id possible
         message_id = re.search(r"<[^<>\s]+>", message)
