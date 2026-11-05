@@ -1772,6 +1772,72 @@ class NNTPClient(BaseNNTPClient):
                     line = b"." + line
                 yield line + b"\r\n"
 
+    def _transfer_article(
+        self,
+        verb: str,
+        args: str | None,
+        headers: Mapping[str, str] | None,
+        body: str | bytes | Iterable[bytes],
+        *,
+        ready: int,
+        accepted: int,
+    ) -> str:
+        """Preflight an entire article, transfer it, and return the final text."""
+        with tempfile.SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b") as article:
+            article.write(utils.unparse_headers(headers or {}).encode(self.encoding))
+            for line in self._post_body(body):
+                article.write(line)
+            article.write(b".\r\n")
+            article.seek(0)
+
+            code, message = self.command(verb, args)
+            if code != ready:
+                raise self._unexpected(code, message)
+            while chunk := article.read(65536):
+                self.socket.sendall(chunk)
+
+        code, message = self.status()
+        if code != accepted:
+            raise self._unexpected(code, message)
+        return message
+
+    def ihave(
+        self,
+        message_id: str,
+        headers: Mapping[str, str] | None = None,
+        body: str | bytes | Iterable[bytes] = b"",
+    ) -> bool:
+        """Offer an already-posted article for transfer using IHAVE.
+
+        The complete article is prepared before IHAVE is sent, with the same
+        header validation, CRLF normalization, dot-stuffing and spooled-file
+        limit as post(). Only a 335 response permits transmission; a final
+        235 returns True. Responses 435 (not wanted), 436 (retry later) and
+        437 (rejected) raise NNTPTemporaryError under the existing 4xx
+        exception hierarchy; inspect the code to decide whether to retry.
+
+        Use a server permitting article transfers, usually with reader=False.
+        Supply an already complete article's headers, including Message-ID;
+        this method does not generate or rewrite them. The offered ID need
+        not match a supplied Message-ID header, though matching is recommended.
+
+        Raises:
+            ValueError: If the offered Message-ID is not bracketed printable
+                ASCII of at most 250 characters, or a header contains CR/LF.
+            NNTPDataError: If the body contains NUL or bare CR.
+
+        See <https://www.rfc-editor.org/rfc/rfc3977#section-6.3.2>.
+        """
+        if (
+            len(message_id) > 250
+            or re.fullmatch(r"<[\x21-\x3b\x3d\x3f-\x7e]+>", message_id) is None
+        ):
+            raise ValueError("Invalid IHAVE Message-ID")
+        self._transfer_article(
+            "IHAVE", message_id, headers, body, ready=335, accepted=235
+        )
+        return True
+
     def post(
         self,
         headers: Mapping[str, str] | None = None,
@@ -1810,26 +1876,9 @@ class NNTPClient(BaseNNTPClient):
             NNTPDataError without posting a truncated article. Iterable body
             items are treated as lines and consumed before contacting the server.
         """
-        with tempfile.SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b") as article:
-            article.write(utils.unparse_headers(headers or {}).encode(self.encoding))
-            for line in self._post_body(body):
-                article.write(line)
-            article.write(b".\r\n")
-            article.seek(0)
-
-            code, message = self.command("POST")
-            if code != 340:
-                raise self._unexpected(code, message)
-            while chunk := article.read(65536):
-                self.socket.sendall(chunk)
-
-        # get status
-        code, message = self.status()
-
-        # check status
-        if code != 240:
-            raise self._unexpected(code, message)
-
+        message = self._transfer_article(
+            "POST", None, headers, body, ready=340, accepted=240
+        )
         # return message-id possible
         message_id = re.search(r"<[^<>\s]+>", message)
         if message_id is not None:

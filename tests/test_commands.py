@@ -786,3 +786,209 @@ def test_unexpected_singleline_success_does_not_drain(scripted_server: Start) ->
         client.help()
     assert error.value.code == 200
     assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "first\n.dot\r\n\nlast",
+        b"first\n.dot\r\n\nlast",
+        [b"first", b".dot\n", b"", b"last"],
+    ],
+)
+def test_ihave_transfers_prepared_article(
+    scripted_server: Start, body: str | bytes | Iterable[bytes]
+) -> None:
+    server = scripted_server(
+        {
+            "IHAVE <a@b>": ReadArticle(b"335 send article\r\n", b"235 transferred\r\n"),
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client(reader=False)
+    assert client.ihave("<a@b>", {"Message-ID": "<a@b>"}, body) is True
+    assert server.articles == [
+        [
+            b"Message-ID: <a@b>\r\n",
+            b"\r\n",
+            b"first\r\n",
+            b"..dot\r\n",
+            b"\r\n",
+            b"last\r\n",
+        ]
+    ]
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    assert server.received == ["IHAVE <a@b>", "DATE"]
+
+
+@pytest.mark.parametrize(
+    ("code", "final"), [(435, False), (436, False), (436, True), (437, True)]
+)
+def test_ihave_rejection_is_reusable(
+    scripted_server: Start, code: int, *, final: bool
+) -> None:
+    rejection = f"{code} refused\r\n".encode()
+    server = scripted_server(
+        {
+            "IHAVE": ReadArticle(b"335 send article\r\n", rejection)
+            if final
+            else rejection,
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client(reader=False)
+    with pytest.raises(nntp.NNTPTemporaryError) as error:
+        client.ihave("<a@b>", body=b"article")
+    assert error.value.code == code
+    assert server.articles == ([[b"\r\n", b"article\r\n"]] if final else [])
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("final", [False, True])
+def test_ihave_unexpected_multiline_is_drained(
+    scripted_server: Start, *, final: bool
+) -> None:
+    wrong = b"100 wrong success\r\nignored\r\n.\r\n"
+    server = scripted_server(
+        {
+            "IHAVE": ReadArticle(b"335 send article\r\n", wrong) if final else wrong,
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client(reader=False)
+    with pytest.raises(nntp.NNTPReplyError) as error:
+        client.ihave("<a@b>")
+    assert error.value.code == 100
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
+    "message_id",
+    [
+        "",
+        "<>",
+        "a@b",
+        "<a b>",
+        "<a\r\nb>",
+        "<a\0b>",
+        "<<a@b>>",
+        "<café@b>",
+        "<" + "a" * 249 + ">",
+    ],
+)
+def test_ihave_invalid_id_sends_nothing(
+    scripted_server: Start, message_id: str
+) -> None:
+    server = scripted_server()
+    client = server.client(reader=False)
+    with pytest.raises(ValueError, match="Message-ID"):
+        client.ihave(message_id)
+    assert server.received == []
+    assert server.articles == []
+
+
+@pytest.mark.parametrize(
+    "body", [b"good\nbad\0", b"good\nbad\r", [b"good", b"bad\rline"]]
+)
+def test_ihave_invalid_body_sends_nothing(
+    scripted_server: Start, body: bytes | Iterable[bytes]
+) -> None:
+    server = scripted_server()
+    client = server.client(reader=False)
+    with pytest.raises(nntp.NNTPDataError, match="Illegal characters"):
+        client.ihave("<a@b>", body=body)
+    assert server.received == []
+    assert server.articles == []
+
+
+def test_ihave_header_injection_sends_nothing(scripted_server: Start) -> None:
+    server = scripted_server()
+    client = server.client(reader=False)
+    with pytest.raises(ValueError, match="CR or LF"):
+        client.ihave("<a@b>", {"Subject": "safe\r\nX-Injected: yes"})
+    assert server.received == []
+
+
+def test_ihave_preflights_large_failing_source(scripted_server: Start) -> None:
+    server = scripted_server()
+    client = server.client(reader=False)
+
+    def source() -> Iterator[bytes]:
+        for _ in range(17):
+            yield b"x" * 65536 + b"\n"
+        raise RuntimeError("source failed")
+
+    with pytest.raises(RuntimeError, match="source failed"):
+        client.ihave("<a@b>", body=source())
+    assert server.received == []
+    assert server.articles == []
+
+
+def test_ihave_large_body_and_optional_headers(scripted_server: Start) -> None:
+    server = scripted_server({"IHAVE": ReadArticle(b"335 send\r\n", b"235 ok\r\n")})
+    line = b"x" * 65536
+    assert (
+        server.client(reader=False).ihave("<a@b>", body=(line for _ in range(17)))
+        is True
+    )
+    assert server.articles == [[b"\r\n", *[line + b"\r\n"] * 17]]
+
+
+@pytest.mark.parametrize(("code", "final"), [(235, False), (240, True)])
+def test_ihave_rejects_other_success_codes(
+    scripted_server: Start, code: int, *, final: bool
+) -> None:
+    wrong = f"{code} not the expected success\r\n".encode()
+    server = scripted_server(
+        {
+            "IHAVE": ReadArticle(b"335 send\r\n", wrong) if final else wrong,
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client(reader=False)
+    with pytest.raises(nntp.NNTPReplyError) as error:
+        client.ihave("<a@b>")
+    assert error.value.code == code
+    assert bool(server.articles) == final
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+def test_ihave_does_not_pipeline_while_reply_held(scripted_server: Start) -> None:
+    server = scripted_server(
+        {
+            "LIST": b"215 list\r\nlocal.test 1 1 y\r\n.\r\n",
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client(reader=False)
+    reply = client.list()
+    with pytest.raises(nntp.nntp.NNTPSyncError):  # public export is part of B6
+        client.ihave("<a@b>", body=b"article")
+    assert server.received == ["LIST"]
+    del reply
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+def test_ihave_preflights_before_offer_and_keeps_header_id(
+    scripted_server: Start,
+) -> None:
+    offered_id = "<" + "a" * 248 + ">"  # RFC 3977's 250-character limit.
+    prepared = False
+
+    def source() -> Iterator[bytes]:
+        nonlocal prepared
+        yield b"body\n"
+        prepared = True
+
+    def accept(_command: str) -> ReadArticle:
+        assert prepared
+        return ReadArticle(b"335 send\r\n", b"235\r\n")
+
+    server = scripted_server({f"IHAVE {offered_id}": accept})
+    assert (
+        server.client(reader=False).ihave(
+            offered_id, {"Message-ID": "<different@b>"}, source()
+        )
+        is True
+    )
+    assert server.articles == [[b"Message-ID: <different@b>\r\n", b"\r\n", b"body\r\n"]]
