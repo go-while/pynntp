@@ -1,27 +1,45 @@
-[tool.poetry]
+[project]
 name = "pynntp"
 version = "2.0.1"
 description = "NNTP Library (including compressed headers)"
-authors = ["Byron Platt <byron.platt@gmail.com>"]
+authors = [{ name = "Byron Platt", email = "byron.platt@gmail.com" }]
 license = "GPL-3.0-or-later"
 readme = "README.md"
-packages = [{ include = "nntp" }]
+requires-python = ">=3.10"
+dependencies = []
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Operating System :: OS Independent",
     "Topic :: Communications :: Usenet News",
+    "Typing :: Typed",
 ]
 
-[tool.poetry.dependencies]
-python = ">=3.9"
+[project.urls]
+Homepage = "https://github.com/go-while/pynntp"
+Repository = "https://github.com/go-while/pynntp"
+Issues = "https://github.com/go-while/pynntp/issues"
+Documentation = "https://greenbender.github.io/pynntp/"
+
+[tool.poetry]
+packages = [{ include = "nntp" }]
+# the tests and the changelog fragments go into the sdist (#74)
+include = [
+    { path = "tests", format = "sdist" },
+    { path = "changes", format = "sdist" },
+]
 
 [tool.poetry.group.dev.dependencies]
+coverage = "*"
 mypy = "^1.11.2"
 pre-commit = ">=3.8,<5.0"
 pytest = "^8.3.2"
-pytest-benchmark = ">=4,<6"
-ruff = ">=0.6.9,<0.10.0"
+ruff = ">=0.6.9"
 sphinx-pyproject = "*"
 
 [tool.poetry.group.docs]
@@ -34,10 +52,11 @@ sphinx-pyproject = "*"
 
 
 [build-system]
-requires = ["poetry-core"]
+requires = ["poetry-core>=2.0"]
 build-backend = "poetry.core.masonry.api"
+
 [tool.ruff]
-target-version = "py39"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = [
