@@ -1,5 +1,6 @@
 import os
 from unittest import mock
+from uuid import uuid4
 
 import pytest
 
@@ -139,14 +140,25 @@ def test_list_active(newsgroup: str) -> None:
     ],
 )
 def test_article(newsgroup: str) -> None:
+    message_id = f"<pynntp-article-{uuid4().hex}@example.test>"
+    subject = f"Article regression {message_id}"
+    body = f"This is a test article for {newsgroup}"
     with nntp.NNTPClient("localhost") as nntp_client:
+        nntp_client.post(
+            {
+                "Subject": subject,
+                "From": "pynntp tests <test@example.test>",
+                "Newsgroups": newsgroup,
+                "Message-ID": message_id,
+            },
+            body,
+        )
         total, first, last, group = nntp_client.group(newsgroup)
-        assert total == 0 if newsgroup == "junk" else 1
-        assert first == 1
-        assert last == 0 if newsgroup == "junk" else 1
+        assert total >= 1
+        assert 0 < first <= last
         assert group == newsgroup
-        article_number, headers, body = nntp_client.article()
-        assert article_number == 1
+        _article_number, headers, received_body = nntp_client.article(message_id)
+        assert headers["Message-ID"] == message_id
         assert headers["Newsgroups"] == newsgroup
-        assert headers["Subject"] == f"Test post to {newsgroup}"
-        assert body == f"This is a test post to {newsgroup}\r\n".encode()
+        assert headers["Subject"] == subject
+        assert received_body == f"{body}\r\n".encode()
