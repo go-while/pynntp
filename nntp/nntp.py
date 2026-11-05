@@ -29,7 +29,7 @@ import weakref
 import zlib
 from datetime import datetime, timezone
 from functools import cached_property
-from typing import TYPE_CHECKING, Callable, Literal
+from typing import TYPE_CHECKING, Literal
 
 from . import utils
 from .fifo import BytesFifo
@@ -38,7 +38,7 @@ from .types import SSLMode
 from .yenc import YEnc, check_trailer, is_keyword_line, trailer_crc32
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Iterator, Mapping
+    from collections.abc import Callable, Iterable, Iterator, Mapping
     from types import TracebackType
 
     from typing_extensions import Self
@@ -1460,7 +1460,7 @@ class NNTPClient(BaseNNTPClient):
             parts = line.rstrip().split("\t")
             try:
                 articleno = int(parts[0])
-                overview = HeaderDict(zip(fmt, parts[1:]))
+                overview = HeaderDict(zip(fmt, parts[1:], strict=False))
             except (IndexError, ValueError):
                 raise NNTPDataError(f"Invalid {verb} response")
             yield articleno, overview

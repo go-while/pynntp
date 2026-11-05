@@ -1,7 +1,7 @@
 from enum import Enum
-from typing import NamedTuple, Union
+from typing import NamedTuple
 
-Range = Union[int, tuple[int], tuple[int, int]]
+Range = int | tuple[int] | tuple[int, int]
 
 
 class Newsgroup(NamedTuple):
