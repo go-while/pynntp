@@ -16,7 +16,7 @@ before it was merged. The merge commits are in `git log --first-parent develop-0
 | Bug 1: dot-unstuffing (#99), plus gzip replies read to their end | fixed | 56f765e |
 | Bug 2: LIST ACTIVE / NEWGROUPS high and low | fixed | 387c249 |
 | Bug 3: NEWGROUPS / NEWNEWS send `GMT` | fixed | e0e48f6 |
-| Bug 4: HDR expects 225; unexpected multi-line codes drained | fixed | c4c81ef |
+| Bug 4: HDR expects 225; an unexpected multi-line success code is drained for HDR/XHDR/XZHDR/XPAT and, since C8, XOVER/XZVER/OVER/LISTGROUP/STAT | fixed for those; the other commands are open in C9 | c4c81ef, 9799bbf |
 | Bug 5: abandoned or failed replies lock the client | fixed | 1b5c877 |
 | Bug 6: `close()` / `quit()` / `__exit__` | fixed | 64acff4 |
 | Bug 7: MODE READER before STARTTLS, buffer cleared, no AUTHINFO before TLS | fixed (CAPABILITIES re-read deferred) | 53f273d |
