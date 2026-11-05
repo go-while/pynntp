@@ -1408,7 +1408,7 @@ class NNTPClient(BaseNNTPClient):
 
         code, message = self.command("ARTICLE", args)
         if code != 220:
-            raise NNTPReplyError(code, message)
+            raise self._unexpected(code, message)
 
         parts = message.split(None, 1)
 
@@ -1456,7 +1456,7 @@ class NNTPClient(BaseNNTPClient):
 
         code, message = self.command("HEAD", args)
         if code != 221:
-            raise NNTPReplyError(code, message)
+            raise self._unexpected(code, message)
 
         lines = self._info(code, message)
         try:
@@ -1495,7 +1495,7 @@ class NNTPClient(BaseNNTPClient):
 
         code, message = self.command("BODY", args)
         if code != 222:
-            raise NNTPReplyError(code, message)
+            raise self._unexpected(code, message)
 
         lines = self._info(code, message)
         try:
