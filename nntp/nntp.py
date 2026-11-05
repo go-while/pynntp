@@ -296,9 +296,16 @@ class BaseNNTPClient:
         """Reads data from the socket.
 
         Raises:
-            NNTPError: When connection times out or read from socket fails.
+            NNTPTimeoutError: When the read times out. The connection is
+                closed then: the late reply would be taken for the next one.
+            NNTPError: When the server closed the connection.
         """
-        data = self.socket.recv(size)
+        try:
+            data = self.socket.recv(size)
+        except TimeoutError as exc:
+            with contextlib.suppress(OSError):
+                self.socket.close()
+            raise NNTPTimeoutError("Reading from the server timed out") from exc
         if not data:
             raise NNTPError("Failed to read from socket")
         self._buffer.write(data)
