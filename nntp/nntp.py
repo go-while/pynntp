@@ -112,6 +112,14 @@ class NNTPDataError(NNTPError):
     """
 
 
+def _inflate(inflate: zlib._Decompress, data: bytes) -> bytes:
+    """Decompress data, raising NNTPDataError on corrupt data."""
+    try:
+        return inflate.decompress(data)
+    except zlib.error:
+        raise NNTPDataError("Decompression failed")
+
+
 class BaseNNTPClient:
     """NNTP BaseNNTPClient.
 
@@ -301,7 +309,7 @@ class BaseNNTPClient:
             if line == b".\r\n":
                 break
             if line.startswith(b"."):
-                yield line[1:]
+                line = line[1:]
             yield line
 
         self._generating = False
@@ -338,21 +346,39 @@ class BaseNNTPClient:
 
         done, buf = False, BytesFifo()
         while not done:
-            try:
-                data = inflate.decompress(next(self._buf()))
-            except zlib.error:
-                raise NNTPDataError("Decompression failed")
-            if data:
+            data = next(self._buf())
+            if inflate.eof:
+                # the terminator follows the compressed data
                 buf.write(data)
-            if inflate.unused_data:
-                buf.write(inflate.unused_data)
+            else:
+                buf.write(_inflate(inflate, data))
+                if inflate.eof:
+                    # whatever came after the end of the gzip stream, once
+                    buf.write(inflate.unused_data)
             for line in buf:
                 if line == b".\r\n":
                     done = True
                     break
                 if line.startswith(b"."):
-                    yield line[1:]
+                    line = line[1:]
                 yield line
+
+        if inflate.eof:
+            # raw bytes after the terminator belong to the next reply
+            rest = buf.read()
+        else:
+            # The terminator was inside the compressed data: read the rest of
+            # the gzip stream (at least its trailer) so that it can't be taken
+            # for the next reply. Whatever follows the stream is that reply.
+            buf.clear()
+            while not inflate.eof:
+                _inflate(inflate, next(self._buf()))
+            rest = inflate.unused_data
+        if rest:
+            buffer = BytesFifo()
+            buffer.write(rest)
+            buffer.write(self._buffer.read())
+            self._buffer = buffer
 
         self._generating = False
 
