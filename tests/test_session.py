@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import contextlib
 import socket
+import ssl
 from typing import TYPE_CHECKING
+from unittest import mock
 
 import pytest
 
@@ -421,6 +423,130 @@ def test_automatic_login_preflights_both_credentials(scripted_server: Start) -> 
         client.date()
     assert client.date().year == 2026
     assert server.received == ["MODE READER", "DATE", "DATE"]
+
+
+@pytest.mark.parametrize(
+    ("setting", "insecure"),
+    [("0", False), ("false", False), ("", False), ("1", True), ("yes", True)],
+)
+def test_tls_insecure_environment_values(
+    scripted_server: Start,
+    monkeypatch: pytest.MonkeyPatch,
+    setting: str,
+    *,
+    insecure: bool,
+) -> None:
+    context = ssl.create_default_context()
+    monkeypatch.setenv("PYNNTP_TLS_INSECURE", setting)
+    monkeypatch.setattr(ssl, "create_default_context", lambda: context)
+    monkeypatch.setattr(context, "wrap_socket", lambda sock, **_kwargs: sock)
+    client = scripted_server().client(use_ssl=True)
+    assert context.check_hostname is not insecure
+    assert context.verify_mode == (ssl.CERT_NONE if insecure else ssl.CERT_REQUIRED)
+    client.close()
+
+
+def test_explicit_tls_context_is_used_without_mutation(
+    scripted_server: Start, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    context = ssl.create_default_context()
+    monkeypatch.setenv("PYNNTP_TLS_INSECURE", "1")
+    wrapped: list[str] = []
+
+    def wrap(sock: socket.socket, *, server_hostname: str) -> socket.socket:
+        wrapped.append(server_hostname)
+        return sock
+
+    monkeypatch.setattr(context, "wrap_socket", wrap)
+    client = scripted_server().client(use_ssl=True, ssl_context=context)
+    assert wrapped == ["127.0.0.1"]
+    assert context.check_hostname
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    client.close()
+
+
+def test_timeout_and_sync_errors_are_exported() -> None:
+    assert issubclass(nntp.NNTPTimeoutError, nntp.NNTPError)
+    assert issubclass(nntp.NNTPTimeoutError, TimeoutError)
+    assert issubclass(nntp.NNTPSyncError, nntp.NNTPError)
+
+
+def test_connect_timeout_is_nntp_and_timeout_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def connect(*_args: object, **_kwargs: object) -> socket.socket:
+        raise TimeoutError("connect timed out")
+
+    monkeypatch.setattr(socket, "create_connection", connect)
+    with pytest.raises(nntp.NNTPTimeoutError) as error:
+        nntp.NNTPClient("localhost")
+    assert isinstance(error.value, TimeoutError)
+    assert isinstance(error.value.__cause__, TimeoutError)
+
+
+def test_send_timeout_is_nntp_and_timeout_error(scripted_server: Start) -> None:
+    server = scripted_server()
+    client = server.client()
+    real_socket = client.socket
+    fake = mock.Mock(wraps=real_socket)
+    fake.sendall.side_effect = TimeoutError("send timed out")
+    client.socket = fake
+    try:
+        with pytest.raises(nntp.NNTPTimeoutError) as error:
+            client.date()
+        assert isinstance(error.value, TimeoutError)
+        assert isinstance(error.value.__cause__, TimeoutError)
+        assert real_socket.fileno() == -1
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize("mode", [SSLMode.IMPLICIT, SSLMode.STARTTLS])
+def test_tls_timeout_is_nntp_and_timeout_error(
+    scripted_server: Start, monkeypatch: pytest.MonkeyPatch, mode: SSLMode
+) -> None:
+    context = ssl.create_default_context()
+    sockets: list[socket.socket] = []
+
+    def wrap(sock: socket.socket, **_kwargs: object) -> socket.socket:
+        sockets.append(sock)
+        raise TimeoutError("handshake timed out")
+
+    monkeypatch.setattr(context, "wrap_socket", wrap)
+    server = scripted_server({"STARTTLS": b"382 ready\r\n"})
+    with pytest.raises(nntp.NNTPTimeoutError) as error:
+        server.client(use_ssl=True, ssl_mode=mode, ssl_context=context)
+    assert isinstance(error.value, TimeoutError)
+    assert isinstance(error.value.__cause__, TimeoutError)
+    assert sockets[0].fileno() == -1
+
+
+def test_closed_socket_reports_nntp_error(scripted_server: Start) -> None:
+    client = scripted_server().client()
+    client.close()
+    with pytest.raises(nntp.NNTPError, match="closed"):
+        client.date()
+
+
+def test_empty_password_after_381_is_not_sent(scripted_server: Start) -> None:
+    server = scripted_server({"AUTHINFO USER user": b"381 password required\r\n"})
+    client = server.client(username="user")
+    with pytest.raises(nntp.NNTPError, match="password"):
+        client.login()
+    assert server.received == ["MODE READER", "AUTHINFO USER user"]
+
+
+def test_unexpected_capabilities_block_is_drained(scripted_server: Start) -> None:
+    server = scripted_server(
+        {
+            "CAPABILITIES": b"215 list\r\nline\r\n.\r\n",
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client()
+    with pytest.raises(nntp.NNTPReplyError):
+        list(client.capabilities())
+    assert client.date().year == 2026
 
 
 def test_exception_closes_without_quit(scripted_server: Start) -> None:

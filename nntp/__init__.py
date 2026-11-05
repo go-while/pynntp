@@ -6,7 +6,9 @@ from .nntp import (
     NNTPPermanentError,
     NNTPProtocolError,
     NNTPReplyError,
+    NNTPSyncError,
     NNTPTemporaryError,
+    NNTPTimeoutError,
 )
 
 __all__ = [
@@ -17,5 +19,7 @@ __all__ = [
     "NNTPPermanentError",
     "NNTPProtocolError",
     "NNTPReplyError",
+    "NNTPSyncError",
     "NNTPTemporaryError",
+    "NNTPTimeoutError",
 ]

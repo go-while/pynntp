@@ -53,12 +53,18 @@ __all__ = [
     "NNTPPermanentError",
     "NNTPProtocolError",
     "NNTPReplyError",
+    "NNTPSyncError",
     "NNTPTemporaryError",
+    "NNTPTimeoutError",
 ]
 
 
 class NNTPError(Exception):
     """Base class for all NNTP errors."""
+
+
+class NNTPTimeoutError(NNTPError, TimeoutError):
+    """An NNTP socket operation timed out."""
 
 
 class NNTPSyncError(NNTPError):
@@ -192,6 +198,7 @@ class BaseNNTPClient:
         timeout: int = 30,
         use_ssl: bool = False,
         ssl_mode: SSLMode = SSLMode.IMPLICIT,
+        ssl_context: ssl.SSLContext | None = None,
     ) -> None:
         """Constructor for BasicNNTPClient.
 
@@ -205,6 +212,8 @@ class BaseNNTPClient:
             timeout: Connection timeout
             use_ssl: Should we use SSL (TLS)
             ssl_mode: SSL (TLS) mode to use
+            ssl_context: Optional TLS context; used unchanged instead of the
+                default context and PYNNTP_TLS_INSECURE setting.
 
         Raises:
             IOError (socket.error): On error in underlying socket and/or ssl
@@ -217,9 +226,13 @@ class BaseNNTPClient:
         self.username = username
         self.password = password
         self._tls_pending = use_ssl and ssl_mode == SSLMode.STARTTLS
+        self._ssl_context = ssl_context
 
         # connect
-        self.socket = socket.create_connection((host, port), timeout=timeout)
+        try:
+            self.socket = socket.create_connection((host, port), timeout=timeout)
+        except TimeoutError as exc:
+            raise NNTPTimeoutError("Connection timed out") from exc
         try:
             if use_ssl and ssl_mode == SSLMode.IMPLICIT:
                 self._enable_tls(host)
@@ -245,14 +258,18 @@ class BaseNNTPClient:
         self._tls_pending = False
 
     def _enable_tls(self, host: str) -> None:
-        context = ssl.create_default_context()
-        if "PYNNTP_TLS_INSECURE" in os.environ:
+        context = self._ssl_context or ssl.create_default_context()
+        insecure = os.environ.get("PYNNTP_TLS_INSECURE", "").strip().lower()
+        if self._ssl_context is None and insecure in {"1", "true", "yes", "on"}:
             context.check_hostname = False
             context.verify_mode = ssl.CERT_NONE
-        self.socket = context.wrap_socket(
-            self.socket,
-            server_hostname=host,
-        )
+        try:
+            self.socket = context.wrap_socket(
+                self.socket,
+                server_hostname=host,
+            )
+        except TimeoutError as exc:
+            raise NNTPTimeoutError("TLS negotiation timed out") from exc
 
     def _recv(self, size: int = 4096) -> None:
         """Reads data from the socket.
@@ -646,6 +663,8 @@ class BaseNNTPClient:
 
         CR, LF and NUL are rejected in both the verb and arguments.
         """
+        if self.socket.fileno() == -1:
+            raise NNTPError("Connection is closed")
         if self._generating:
             raise NNTPSyncError("Command issued while a generator is active")
 
@@ -667,8 +686,16 @@ class BaseNNTPClient:
     def _command_once(self, verb: str, args: str | None = None) -> tuple[int, str]:
         """Send one command without automatic authentication or retries."""
         self._validate_command(verb, args)
+        if self.socket.fileno() == -1:
+            raise NNTPError("Connection is closed")
         cmd = f"{verb} {args}\r\n" if args else f"{verb}\r\n"
-        self.socket.sendall(cmd.encode(self.encoding))
+        try:
+            self.socket.sendall(cmd.encode(self.encoding))
+        except TimeoutError as exc:
+            # A partial command may have reached the server; don't reuse it.
+            with contextlib.suppress(OSError):
+                self.socket.close()
+            raise NNTPTimeoutError("Sending command timed out") from exc
         return self.status()
 
     @staticmethod
@@ -683,6 +710,7 @@ class BaseNNTPClient:
 
         Authentication errors propagate without retries. A username is required,
         and credentials are never sent while a requested STARTTLS is pending.
+        If the server requests a password, an empty password raises NNTPError.
         """
         if self._generating:
             raise NNTPSyncError("Command issued while a generator is active")
@@ -697,6 +725,8 @@ class BaseNNTPClient:
         self._validate_command("AUTHINFO PASS", password)
         code, message = self._command_once("AUTHINFO USER", username)
         if code == 381:
+            if not password:
+                raise NNTPError("A password is required for authentication")
             code, message = self._command_once("AUTHINFO PASS", password)
         if code != 281:
             raise NNTPReplyError(code, message)
@@ -736,7 +766,7 @@ class NNTPClient(BaseNNTPClient):
         NNTPDataError.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         host: str,
         port: int = 119,
@@ -747,6 +777,7 @@ class NNTPClient(BaseNNTPClient):
         use_ssl: bool = False,
         ssl_mode: SSLMode = SSLMode.IMPLICIT,
         reader: bool = True,
+        ssl_context: ssl.SSLContext | None = None,
     ) -> None:
         """Constructor for NNTP NNTPClient.
 
@@ -761,6 +792,7 @@ class NNTPClient(BaseNNTPClient):
             use_ssl: Should we use ssl
             ssl_mode: SSL mode to use
             reader: Use reader mode
+            ssl_context: Optional TLS context, used unchanged.
 
         Note:
             With STARTTLS, MODE READER is attempted before upgrading. If it
@@ -782,6 +814,7 @@ class NNTPClient(BaseNNTPClient):
             timeout=timeout,
             use_ssl=use_ssl and not starttls,
             ssl_mode=ssl_mode,
+            ssl_context=ssl_context,
         )
         try:
             self._tls_pending = starttls
@@ -848,7 +881,7 @@ class NNTPClient(BaseNNTPClient):
 
         code, message = self.command("CAPABILITIES", args)
         if code != 101:
-            raise NNTPReplyError(code, message)
+            raise self._unexpected(code, message)
 
         for line in self.info(code, message):
             yield line.strip()
