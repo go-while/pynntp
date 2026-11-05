@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import socket
 from typing import TYPE_CHECKING
 
@@ -97,6 +98,142 @@ def test_tls_handshake_failure_closes_socket(
     finally:
         for sock in opened:
             sock.close()
+
+
+@pytest.mark.parametrize("reader", [True, False])
+def test_starttls_orders_reader_and_discards_plaintext(
+    scripted_server: Start, monkeypatch: pytest.MonkeyPatch, reader: bool
+) -> None:
+    server = scripted_server(
+        {
+            "STARTTLS": b"382 begin TLS\r\n111 19990101000000\r\n",
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    handshakes: list[str] = []
+
+    def fake_tls(client: nntp.BaseNNTPClient, host: str) -> None:
+        assert client._buffer.read() == b""  # noqa: SLF001
+        handshakes.append(host)
+
+    monkeypatch.setattr(nntp.BaseNNTPClient, "_enable_tls", fake_tls)
+    client = server.client(use_ssl=True, ssl_mode=SSLMode.STARTTLS, reader=reader)
+    assert handshakes == ["127.0.0.1"]
+    assert server.received == (["MODE READER"] if reader else []) + ["STARTTLS"]
+    assert client.date().year == 2026
+    client.quit()
+
+
+def test_starttls_reader_precedes_upgrade(
+    scripted_server: Start, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    server = scripted_server({"STARTTLS": b"382 begin TLS\r\n"})
+    monkeypatch.setattr(nntp.BaseNNTPClient, "_enable_tls", lambda *_: None)
+    client = server.client(use_ssl=True, ssl_mode=SSLMode.STARTTLS)
+    assert server.received == ["MODE READER", "STARTTLS"]
+    client.quit()
+
+
+def test_base_starttls_does_not_request_reader(
+    scripted_server: Start, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    server = scripted_server({"STARTTLS": b"382 begin TLS\r\n"})
+    monkeypatch.setattr(nntp.BaseNNTPClient, "_enable_tls", lambda *_: None)
+    client = nntp.BaseNNTPClient(
+        "127.0.0.1", server.port, use_ssl=True, ssl_mode=SSLMode.STARTTLS
+    )
+    try:
+        assert server.received == ["STARTTLS"]
+    finally:
+        client.close()
+
+
+def test_starttls_does_not_authenticate_in_plaintext(
+    scripted_server: Start, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    modes = iter([b"480 authentication required\r\n", b"200 ready\r\n"])
+    server = scripted_server(
+        {
+            "MODE READER": lambda _line: next(modes),
+            "AUTHINFO USER user": b"381 password needed\r\n",
+            "AUTHINFO PASS pass": b"281 accepted\r\n",
+            "STARTTLS": b"382 begin TLS\r\n",
+        }
+    )
+    before_tls: list[str] = []
+
+    def enable_tls(_client: nntp.BaseNNTPClient, _host: str) -> None:
+        before_tls.extend(server.received)
+
+    monkeypatch.setattr(nntp.BaseNNTPClient, "_enable_tls", enable_tls)
+    # Failing closed is acceptable; disclosing credentials before TLS isn't.
+    with contextlib.suppress(nntp.NNTPError):
+        server.client(
+            username="user",
+            password="pass",  # noqa: S106 (dummy scripted-server credential)
+            use_ssl=True,
+            ssl_mode=SSLMode.STARTTLS,
+        )
+    assert not any(
+        line.startswith("AUTHINFO") for line in (before_tls or server.received)
+    )
+
+
+@pytest.mark.parametrize("response", [b"480 authenticate\r\n", b"483 use TLS\r\n"])
+def test_starttls_reader_auth_is_deferred(
+    scripted_server: Start, monkeypatch: pytest.MonkeyPatch, response: bytes
+) -> None:
+    dates = iter([b"480 authenticate\r\n", b"111 20260102030405\r\n"])
+    server = scripted_server(
+        {
+            "MODE READER": response,
+            "STARTTLS": b"382 begin TLS\r\n",
+            "DATE": lambda _line: next(dates),
+            "AUTHINFO USER user": b"381 password required\r\n",
+            "AUTHINFO PASS pass": b"281 accepted\r\n",
+        }
+    )
+    before_tls: list[str] = []
+
+    def enable_tls(_client: nntp.BaseNNTPClient, _host: str) -> None:
+        before_tls.extend(server.received)
+
+    monkeypatch.setattr(nntp.BaseNNTPClient, "_enable_tls", enable_tls)
+    client = server.client(
+        username="user",
+        password="pass",  # noqa: S106 (dummy test credential)
+        use_ssl=True,
+        ssl_mode=SSLMode.STARTTLS,
+    )
+    assert before_tls == ["MODE READER", "STARTTLS"]
+    assert client.date().year == 2026
+    assert server.received == [
+        "MODE READER",
+        "STARTTLS",
+        "DATE",
+        "AUTHINFO USER user",
+        "AUTHINFO PASS pass",
+        "DATE",
+    ]
+    client.close()
+
+
+@pytest.mark.parametrize("base", [True, False])
+def test_starttls_auth_challenge_never_sends_credentials(
+    scripted_server: Start, base: bool
+) -> None:
+    server = scripted_server({"STARTTLS": b"480 authenticate\r\n"})
+    cls = nntp.BaseNNTPClient if base else nntp.NNTPClient
+    with pytest.raises(nntp.NNTPTemporaryError, match="480"):
+        cls(
+            "127.0.0.1",
+            server.port,
+            username="user",
+            password="pass",  # noqa: S106 (dummy test credential)
+            use_ssl=True,
+            ssl_mode=SSLMode.STARTTLS,
+        )
+    assert server.received == ([] if base else ["MODE READER"]) + ["STARTTLS"]
 
 
 def test_exception_closes_without_quit(scripted_server: Start) -> None:
