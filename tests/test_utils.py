@@ -51,10 +51,11 @@ def test_unparse_msgid_range(msgid_range: str | Range, expected: str) -> None:
 @pytest.mark.parametrize(
     ("line", "expected"),
     [
-        ("local.test 0 1 y", ("local.test", 0, 1, "y")),
-        ("local.test 0 1 n", ("local.test", 0, 1, "n")),
-        ("alt.test 10 20 y", ("alt.test", 10, 20, "y")),
-        ("alt.test\t10\t20 ?", ("alt.test", 10, 20, "?")),
+        ("local.test 0 1 y", ("local.test", 1, 0, "y")),
+        ("local.test 0 1 n", ("local.test", 1, 0, "n")),
+        ("alt.test 20 10 y", ("alt.test", 10, 20, "y")),
+        ("alt.test\t20\t10 ?", ("alt.test", 10, 20, "?")),
+        ("alt.test 0000000042 0000000007 m\r\n", ("alt.test", 7, 42, "m")),
         pytest.param("alt.test", None, marks=pytest.mark.xfail(raises=ValueError)),
         pytest.param("alt.test 10", None, marks=pytest.mark.xfail(raises=ValueError)),
         pytest.param(

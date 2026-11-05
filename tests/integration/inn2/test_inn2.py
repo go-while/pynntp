@@ -114,12 +114,19 @@ def test_post(newsgroup: str) -> None:
 @pytest.mark.parametrize("newsgroup", ["local.general", "local.test", "junk"])
 def test_list_active(newsgroup: str) -> None:
     with nntp.NNTPClient("localhost") as nntp_client:
-        articles = nntp_client.list_active(newsgroup)
-        for name, low, high, status in articles:
-            assert name == newsgroup
-            assert low == 0 if newsgroup == "junk" else 1
-            assert high == 1
-            assert status == "n" if newsgroup == "junk" else "y"
+        articles = list(nntp_client.list_active(newsgroup))
+        assert len(articles) == 1
+        name, low, high, status = articles[0]
+        assert name == newsgroup
+        assert low >= 0
+        assert high >= 0
+        assert low <= high + 1
+        assert status == ("n" if newsgroup == "junk" else "y")
+        if newsgroup != "junk":
+            total, first, last, _group = nntp_client.group(newsgroup)
+            assert high == last
+            if total:
+                assert low == first
 
 
 @pytest.mark.parametrize(

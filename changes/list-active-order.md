@@ -1,0 +1,1 @@
+Changed: LIST ACTIVE and NEWGROUPS now parse the server's `name high low status` field order correctly. The returned `Newsgroup(name, low, high, status)` fields and tuple order are unchanged; remove any workaround that swaps the low and high values.
