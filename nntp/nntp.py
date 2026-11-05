@@ -21,8 +21,10 @@ from __future__ import annotations
 import contextlib
 import io
 import os
+import re
 import socket
 import ssl
+import tempfile
 import weakref
 import zlib
 from datetime import datetime, timezone
@@ -1541,6 +1543,27 @@ class NNTPClient(BaseNNTPClient):
 
         return True
 
+    def _post_body(self, body: str | bytes | Iterable[bytes]) -> Iterator[bytes]:
+        """Yield validated, CRLF-normalized and dot-stuffed body lines."""
+        if isinstance(body, str):
+            body = body.encode(self.encoding, self.errors)
+        if isinstance(body, bytes):
+            body = io.BytesIO(body)
+        for chunk in body:
+            # Iterable items are lines, but may themselves contain LF breaks.
+            # An explicit empty item is a blank line, as in the original API.
+            lines: Iterable[bytes] = io.BytesIO(chunk) if chunk else (b"",)
+            for line in lines:
+                if line.endswith(b"\r\n"):
+                    line = line[:-2]
+                elif line.endswith(b"\n"):
+                    line = line[:-1]
+                if b"\0" in line or b"\r" in line:
+                    raise NNTPDataError("Illegal characters found")
+                if line.startswith(b"."):
+                    line = b"." + line
+                yield line + b"\r\n"
+
     def post(
         self,
         headers: Mapping[str, str] | None = None,
@@ -1572,60 +1595,36 @@ class NNTPClient(BaseNNTPClient):
             will be returned.
 
         Note:
-            Due to protocol issues if illegal characters are found in the body
-            the message will still be posted but will be truncated as soon as
-            an illegal character is detected. No illegal characters will be
-            sent to the server. For information illegal characters include
-            embedded carriage returns '\\r' and null characters '\\0' (because
-            this function converts line feeds to CRLF, embedded line feeds are
-            not an issue)
+            The entire article is prepared before POST is sent, using a
+            temporary file for articles larger than 1 MiB. Illegal characters
+            (bare carriage returns '\\r' and null characters '\\0') raise
+            NNTPDataError without posting a truncated article. Iterable body
+            items are treated as lines and consumed before contacting the server.
         """
-        code, message = self.command("POST")
-        if code != 340:
-            raise NNTPReplyError(code, message)
+        with tempfile.SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b") as article:
+            article.write(utils.unparse_headers(headers or {}).encode(self.encoding))
+            for line in self._post_body(body):
+                article.write(line)
+            article.write(b".\r\n")
+            article.seek(0)
 
-        # TODO: Set some default headers? Require some headers?
-
-        # send headers
-        headers = headers or {}
-        hdrs = utils.unparse_headers(headers)
-        self.socket.sendall(hdrs.encode(self.encoding))
-
-        if isinstance(body, str):
-            body = body.encode(self.encoding, self.errors)
-        if isinstance(body, bytes):
-            body = io.BytesIO(body)
-
-        # send body
-        illegal = False
-        for line in body:
-            if line.startswith(b"."):
-                line = b"." + line
-            if line.endswith(b"\r\n"):
-                line = line[:-2]
-            elif line.endswith(b"\n"):
-                line = line[:-1]
-            if any(c in line for c in b"\0\r"):
-                illegal = True
-                break
-            self.socket.sendall(line + b"\r\n")
-        self.socket.sendall(b".\r\n")
+            code, message = self.command("POST")
+            if code != 340:
+                raise NNTPReplyError(code, message)
+            while chunk := article.read(65536):
+                self.socket.sendall(chunk)
 
         # get status
         code, message = self.status()
-
-        # check if illegal characters were detected
-        if illegal:
-            raise NNTPDataError("Illegal characters found")
 
         # check status
         if code != 240:
             raise NNTPReplyError(code, message)
 
         # return message-id possible
-        message_id = message.split(None, 1)[0]
-        if message_id.startswith("<") and message_id.endswith(">"):
-            return message_id
+        message_id = re.search(r"<[^<>\s]+>", message)
+        if message_id is not None:
+            return message_id.group()
 
         return True
 

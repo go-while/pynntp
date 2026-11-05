@@ -96,17 +96,19 @@ def test_nntp_client_with_ssl_starttls() -> None:
     ],
 )
 def test_post(newsgroup: str) -> None:
+    message_id = f"<pynntp-post-{uuid4().hex}@example.test>"
     headers = {
         "Subject": f"Test post to {newsgroup}",
         "From": "GitHub Actions <actions@github.com>",
         "Newsgroups": newsgroup,
+        "Message-ID": message_id,
     }
     with nntp.NNTPClient("localhost") as nntp_client:
         assert (
             nntp_client.post(
                 headers=headers, body=f"This is a test post to {newsgroup}"
             )
-            is True
+            == message_id
         )
 
 
