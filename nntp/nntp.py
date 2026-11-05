@@ -936,6 +936,9 @@ class NNTPClient(BaseNNTPClient):
     def capabilities(self, keyword: str | None = None) -> Iterator[str]:
         """CAPABILITIES command.
 
+        Sends immediately. Consume, close or drop the returned iterator before
+        another command; retaining it unread raises NNTPSyncError on that command.
+
         Determines the capabilities of the server.
 
         Although RFC3977 states that this is a required command for servers to
@@ -958,8 +961,7 @@ class NNTPClient(BaseNNTPClient):
         if code != 101:
             raise self._unexpected(code, message)
 
-        for line in self.info(code, message):
-            yield line.strip()
+        return self._command_reply(code, message, str.strip)
 
     def mode_reader(self) -> bool:
         """MODE READER command.

@@ -549,6 +549,83 @@ def test_unexpected_capabilities_block_is_drained(scripted_server: Start) -> Non
     assert client.date().year == 2026
 
 
+def test_capabilities_is_eager_and_held_reply_blocks(scripted_server: Start) -> None:
+    server = scripted_server(
+        {
+            "CAPABILITIES": b"101 capabilities\r\nVERSION 2\r\nREADER\r\n.\r\n",
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client()
+    reply = client.capabilities()
+    assert server.received == ["MODE READER", "CAPABILITIES"]
+    with pytest.raises(nntp.NNTPSyncError):
+        client.date()
+    assert list(reply) == ["VERSION 2", "READER"]
+    assert client.date().year == 2026
+
+
+@pytest.mark.parametrize("read_first", [False, True])
+def test_capabilities_close_releases_reply(
+    scripted_server: Start, *, read_first: bool
+) -> None:
+    server = scripted_server(
+        {
+            "CAPABILITIES": b"101 caps\r\nVERSION 2\r\nREADER\r\n.\r\n",
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client()
+    reply = client.capabilities()
+    assert server.received == ["MODE READER", "CAPABILITIES"]
+    if read_first:
+        assert next(reply) == "VERSION 2"
+    reply.close()  # type: ignore[attr-defined]
+    assert client.date().year == 2026
+
+
+def test_dropped_unread_capabilities_drains_before_next_command(
+    scripted_server: Start,
+) -> None:
+    server = scripted_server(
+        {
+            "CAPABILITIES": b"101 caps\r\nVERSION 2\r\n.\r\n",
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client()
+    reply = client.capabilities()
+    assert server.received == ["MODE READER", "CAPABILITIES"]
+    del reply
+    assert client.date().year == 2026
+
+
+def test_capabilities_status_failure_is_eager(scripted_server: Start) -> None:
+    server = scripted_server({"CAPABILITIES": b"500 unsupported\r\n"})
+    client = server.client()
+    with pytest.raises(nntp.NNTPPermanentError):
+        client.capabilities()
+    assert server.received == ["MODE READER", "CAPABILITIES"]
+
+
+def test_capabilities_decode_failure_releases_retained_traceback(
+    scripted_server: Start,
+) -> None:
+    server = scripted_server(
+        {
+            "CAPABILITIES": b"101 caps\r\n\xff\r\nREADER\r\n.\r\n",
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client()
+    client.errors = "strict"
+    reply = client.capabilities()
+    with pytest.raises(UnicodeDecodeError) as error:
+        next(reply)
+    assert error.value.__traceback__ is not None
+    assert client.date().year == 2026
+
+
 def test_exception_closes_without_quit(scripted_server: Start) -> None:
     server = scripted_server()
     with pytest.raises(ValueError, match="user exception"), server.client() as client:
