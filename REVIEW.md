@@ -33,7 +33,7 @@ before it was merged. The merge commits are in `git log --first-parent develop-0
 | Missing: STAT, LISTGROUP, OVER (#43, #45, #46) | added | 9799bbf |
 | Tests: offline scripted-server tests, integration tests opt-in, ARTICLE test independent of numbering | done | 6a4fa47, 7926aa2, d40752c |
 | Packaging: PEP 621, Python >= 3.10, `py.typed`, tests in the sdist (#74), refreshed lock | done | 347c2a1, 2387beb |
-| CI: lint + Python 3.10-3.14 against Ubuntu's inn2 on every work branch | done | 9947800 |
+| CI: lint + Python 3.10-3.14 against Ubuntu's inn2 on pushes to main, develop-*, fix/** and feat/** | done | 9947800 |
 | README example and command list | fixed | f1a67ba |
 | Low: `PYNNTP_TLS_INSECURE=0`, `ssl_context`, timeouts as `NNTPError`, `NNTPSyncError` export, `NNTPProtocolError` from bytes | fixed | e97af1f, 7cb774c, 96ba1b9, 2bc177c |
 | Low: `__main__` demo block | removed | d49534c |

@@ -25,17 +25,19 @@ section before upgrading.
   rest of the reply is then read and dropped before the next command. An
   iterator kept in a variable still blocks until you close or drop it.
 - **yEnc bodies are checked.** `body()` and `article()` check decoded yEnc data
-  against the size and CRC (`pcrc32`, or `crc32` for single-part posts) of its
-  `=yend` trailer, and raise `NNTPDataError` on a mismatch or a missing trailer
+  against the size (required) and, when the trailer has one, the CRC
+  (`pcrc32`, or `crc32` for single-part posts) of its `=yend` trailer, and raise `NNTPDataError` on a mismatch or a missing trailer
   instead of returning corrupt data.
 - **POST checks the whole article first.** `post()` prepares and validates the
   entire article before sending anything (iterable bodies are consumed up
   front; above 1 MiB through a temporary file). NUL or bare CR in the body
   raises `NNTPDataError` and nothing is posted; before, a truncated article
   was posted.
-- **Control characters are rejected** with `ValueError` before anything is
-  sent: CR and LF in header names and values, and CR, LF and NUL in commands,
-  their arguments and AUTHINFO credentials (checked before AUTHINFO USER).
+- **Control characters are rejected** with `ValueError` before they reach the
+  server: CR and LF in header names and values (`post()` and `ihave()` then
+  send nothing), and CR, LF and NUL in commands, their arguments and AUTHINFO
+  credentials (both credentials are checked before AUTHINFO USER is sent; with
+  automatic login, the command that got the 480 has already been sent).
 - **Error types.** Socket timeouts (connect, TLS handshake, sending, reading)
   raise `NNTPTimeoutError` (an `NNTPError` and a `TimeoutError`) and close the
   connection; a `TimeoutError` raised by your own body iterator while `post()`
@@ -44,14 +46,17 @@ section before upgrading.
   raises `NNTPError`.
 - **`PYNNTP_TLS_INSECURE`** turns certificate checks off only for `1`, `true`,
   `yes` or `on`; before, any value (even `0`) did.
-- **STARTTLS** sends MODE READER before TLS (RFC 4642) and never sends AUTHINFO
-  before TLS is up.
+- **STARTTLS** never sends AUTHINFO before TLS is up; with reader mode on
+  (`NNTPClient(..., reader=True)`, the default) it sends MODE READER before TLS
+  (RFC 4642).
 - **MODE READER after authentication** is not sent again (RFC 4643): if the
-  server answers MODE READER with 480, the client logs in and `mode_reader()`
-  returns `False` (posting status unknown).
+  server answers MODE READER with 480 and credentials were given, the client
+  logs in and, if that succeeds, `mode_reader()` returns `False` (posting
+  status unknown).
 - **LIST EXTENSIONS** is documented as obsolete; use `capabilities()`.
 - The `__main__` demo at the end of `nntp/nntp.py` is removed.
-- Package metadata uses PEP 621; the project URLs point to the maintained fork.
+- Package metadata uses PEP 621; the homepage, repository and issue URLs point
+  to the maintained fork (the documentation URL is still upstream's).
 
 ### Added
 
