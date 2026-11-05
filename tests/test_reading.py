@@ -59,6 +59,29 @@ def test_gzip_terminator_inside(scripted_server: Start) -> None:
     assert client.date() == DATE_VALUE
 
 
+def test_gzip_terminator_inside_split_trailer(scripted_server: Start) -> None:
+    """The gzip trailer arrives after the decompressed terminator (review: sol).
+
+    The 8-byte trailer must be read as part of this reply, not of the next.
+    """
+    blob = gzip.compress(STUFFED + b".\r\n")
+    reply = [_gzip_list(blob[:-8]), 0.05, blob[-8:]]
+    server = scripted_server({"LIST": reply, "DATE": DATE})
+    client = server.client()
+    assert "".join(client.list()) == UNSTUFFED.decode()
+    assert client.date() == DATE_VALUE
+
+
+def test_gzip_terminator_inside_next_reply_follows(scripted_server: Start) -> None:
+    """Bytes after the gzip stream are the start of the next reply."""
+    blob = gzip.compress(STUFFED + b".\r\n")
+    reply = [_gzip_list(blob[:-3]), 0.05, blob[-3:] + DATE]
+    server = scripted_server({"LIST": reply, "DATE": b""})
+    client = server.client()
+    assert "".join(client.list()) == UNSTUFFED.decode()
+    assert client.date() == DATE_VALUE
+
+
 def test_gzip_terminator_after_same_read(scripted_server: Start) -> None:
     """The terminator follows the gzip stream, in the same packet."""
     reply = _gzip_list(gzip.compress(STUFFED) + b".\r\n")

@@ -112,6 +112,14 @@ class NNTPDataError(NNTPError):
     """
 
 
+def _inflate(inflate: zlib._Decompress, data: bytes) -> bytes:
+    """Decompress data, raising NNTPDataError on corrupt data."""
+    try:
+        return inflate.decompress(data)
+    except zlib.error:
+        raise NNTPDataError("Decompression failed")
+
+
 class BaseNNTPClient:
     """NNTP BaseNNTPClient.
 
@@ -343,10 +351,7 @@ class BaseNNTPClient:
                 # the terminator follows the compressed data
                 buf.write(data)
             else:
-                try:
-                    buf.write(inflate.decompress(data))
-                except zlib.error:
-                    raise NNTPDataError("Decompression failed")
+                buf.write(_inflate(inflate, data))
                 if inflate.eof:
                     # whatever came after the end of the gzip stream, once
                     buf.write(inflate.unused_data)
@@ -358,8 +363,17 @@ class BaseNNTPClient:
                     line = line[1:]
                 yield line
 
-        # bytes after the terminator belong to the next reply
-        rest = buf.read()
+        if inflate.eof:
+            # raw bytes after the terminator belong to the next reply
+            rest = buf.read()
+        else:
+            # The terminator was inside the compressed data: read the rest of
+            # the gzip stream (at least its trailer) so that it can't be taken
+            # for the next reply. Whatever follows the stream is that reply.
+            buf.clear()
+            while not inflate.eof:
+                _inflate(inflate, next(self._buf()))
+            rest = inflate.unused_data
         if rest:
             buffer = BytesFifo()
             buffer.write(rest)
