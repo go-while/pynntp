@@ -505,3 +505,28 @@ def test_yenc_short_crc_and_text_after_trailer(scripted_server: Start) -> None:
     )
     client = _body_server(scripted_server, reply)
     assert client.body("<a@b>") == data
+
+
+@pytest.mark.parametrize(
+    ("end", "match"),
+    [
+        (b"=yend size=%(size)dgarbage crc32=%(crc)08x", "valid size"),
+        (b"=yend crc32=%(crc)08x", "valid size"),
+        (b"=yend size=ab crc32=0", "valid size"),
+        (b"=yend size=%(size)d crc32=0garbage", "invalid CRC"),
+        (b"=yend size=%(size)d crc32=123456789", "invalid CRC"),
+    ],
+)
+def test_yenc_malformed_trailer(scripted_server: Start, end: bytes, match: str) -> None:
+    """Review: sol. Malformed trailers raise NNTPDataError, not ValueError."""
+    client = _body_server(scripted_server, _yenc_body(YDATA, end=end))
+    with pytest.raises(nntp.NNTPDataError, match=match):
+        client.body("<a@b>")
+    assert client.date() == DATE_VALUE
+
+
+def test_text_body_starting_like_yenc(scripted_server: Start) -> None:
+    """Only the =ybegin keyword starts yEnc, not a word that begins with it."""
+    reply = b"222 0 <a@b> body\r\n=ybeginners guide\r\ntext\r\n.\r\n"
+    client = _body_server(scripted_server, reply)
+    assert client.body("<a@b>") == b"=ybeginners guide\r\ntext\r\n"

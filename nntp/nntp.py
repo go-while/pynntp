@@ -32,7 +32,7 @@ from . import utils
 from .fifo import BytesFifo
 from .headerdict import HeaderDict
 from .types import SSLMode
-from .yenc import YEnc, check_trailer, trailer_crc32
+from .yenc import YEnc, check_trailer, is_keyword_line, trailer_crc32
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Mapping
@@ -1178,7 +1178,7 @@ class NNTPClient(BaseNNTPClient):
         for line in lines:
             # detect yenc
             if decode is None:
-                if line.startswith(b"=ybegin"):
+                if is_keyword_line(line, b"=ybegin"):
                     decode = True
                     del body[:]
                 elif line != b"\r\n":
@@ -1188,13 +1188,13 @@ class NNTPClient(BaseNNTPClient):
             if decode:
                 if trailer:
                     continue  # text after =yend is not part of the data
-                if line.startswith(b"=ybegin"):
+                if is_keyword_line(line, b"=ybegin"):
                     begin = line
                     continue
-                if line.startswith(b"=yend"):
+                if is_keyword_line(line, b"=yend"):
                     trailer = line
                     continue
-                if line.startswith(b"=ypart"):
+                if is_keyword_line(line, b"=ypart"):
                     continue
                 line = decoder.decode(line)
 
