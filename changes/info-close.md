@@ -1,0 +1,1 @@
+Fixed: the iterator returned by info() (and so by list()) has a close() that drops the rest of the reply at once, also before its first line was read; on a generator, close() did nothing until the generator was garbage-collected.

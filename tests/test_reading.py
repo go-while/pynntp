@@ -578,3 +578,24 @@ def test_invalid_status_line(scripted_server: Start, line: bytes) -> None:
         client.date()
     assert isinstance(info.value.args[0], str)
     assert info.value.args[0].startswith("Invalid status line")
+
+
+def test_info_close_before_first_line(scripted_server: Start) -> None:
+    """close() on a reply that was never read drops it at once (A7)."""
+    server = scripted_server({"HELP": b"100 help\r\nline\r\n.\r\n", "DATE": DATE})
+    client = server.client()
+    code, message = client.command("HELP")
+    reply = client.info(code, message)
+    reply.close()  # type: ignore[attr-defined]
+    assert client.date() == DATE_VALUE
+    assert list(reply) == []
+
+
+def test_info_close_after_first_line(scripted_server: Start) -> None:
+    server = scripted_server({"HELP": b"100 help\r\none\r\ntwo\r\n.\r\n", "DATE": DATE})
+    client = server.client()
+    code, message = client.command("HELP")
+    reply = client.info(code, message)
+    assert next(reply) == "one\r\n"
+    reply.close()  # type: ignore[attr-defined]
+    assert client.date() == DATE_VALUE
