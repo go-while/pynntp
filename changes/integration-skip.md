@@ -1,1 +1,0 @@
-Changed: the integration tests, which post articles to the NNTP server on localhost, run only when PYNNTP_INTEGRATION=1 is set (CI sets it); otherwise they are skipped, so the test suite from the sdist runs anywhere without touching a news server (#56).

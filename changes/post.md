@@ -1,2 +1,0 @@
-Changed: POST prepares and validates the entire article before sending anything to the server, consuming iterable bodies up front and using a temporary file above 1 MiB. NUL or bare-CR input and source-iterator errors no longer post a truncated article.
-Fixed: POST returns the Message-ID wherever it appears in a successful server reply, including INN's `240 Article received <id>` format. Replies without a Message-ID still return `True`.

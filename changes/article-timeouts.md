@@ -1,1 +1,0 @@
-Fixed: POST and IHAVE article-send timeouts raise `NNTPTimeoutError` (also a `TimeoutError`) with the original cause and close the connection. Initial/final status timeouts also close it; an existing transport `NNTPTimeoutError` is preserved. No uncertain transfer is retried automatically, since the server may already have accepted the article.
