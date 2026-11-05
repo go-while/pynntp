@@ -1099,9 +1099,9 @@ class NNTPClient(BaseNNTPClient):
                 raise NNTPDataError("Invalid LIST OVERVIEW.FMT")
             if suffix and not name:
                 name, suffix = suffix, name
-            if suffix and suffix != "full":
+            if suffix and suffix.casefold() != "full":
                 raise NNTPDataError("Invalid LIST OVERVIEW.FMT")
-            yield (name, suffix == "full")
+            yield (name, suffix.casefold() == "full")
 
     def list_extensions(self) -> Iterator[str]:
         """LIST EXTENSIONS command.

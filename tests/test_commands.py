@@ -374,8 +374,9 @@ def test_header_invalid_identifier_is_drained(
 
 
 @pytest.mark.parametrize("verb", ["XOVER", "XZVER"])
+@pytest.mark.parametrize("suffix", ["full", "FULL", "FuLl"])
 def test_overview_full_fields_and_empty_values(
-    scripted_server: Start, verb: str
+    scripted_server: Start, verb: str, suffix: str
 ) -> None:
     text = (
         b"1\tsubject\tXrEf: host local.test:1  \r\n2\tsecond\t\r\n3\tthird\tXref:\r\n"
@@ -383,7 +384,9 @@ def test_overview_full_fields_and_empty_values(
     block = _yenczlib_headers(text) if verb == "XZVER" else text + b".\r\n"
     server = scripted_server(
         {
-            "LIST OVERVIEW.FMT": b"215 format\r\nSubject:\r\nXref:full\r\n.\r\n",
+            "LIST OVERVIEW.FMT": (
+                f"215 format\r\nSubject:\r\nXref:{suffix}\r\n.\r\n".encode()
+            ),
             verb: b"224 overview\r\n" + block,
         }
     )
