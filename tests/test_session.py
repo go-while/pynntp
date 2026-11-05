@@ -54,6 +54,22 @@ def test_close_error_does_not_mask_user_exception(
     assert server.received == ["MODE READER"]
 
 
+def test_close_error_does_not_fail_successful_context(
+    scripted_server: Start, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    server = scripted_server()
+    client = server.client()
+
+    def failing_close() -> None:
+        client.socket.close()
+        raise OSError("close failed")
+
+    monkeypatch.setattr(client, "close", failing_close)
+    with client:
+        pass
+    assert client.socket.fileno() == -1
+
+
 def test_active_reply_closes_without_quit(scripted_server: Start) -> None:
     server = scripted_server(
         {"CAPABILITIES": b"101 capabilities\r\nVERSION 2\r\n.\r\n"}
