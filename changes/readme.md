@@ -1,0 +1,1 @@
+Changed: README: correct example (TLS on 563, context manager, streaming XOVER, post() returning the Message-ID), full command list, development and integration-test instructions; pytest collects only tests/ (testpaths).

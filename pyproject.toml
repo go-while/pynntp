@@ -54,6 +54,9 @@ sphinx-pyproject = "*"
 requires = ["poetry-core>=2.0"]
 build-backend = "poetry.core.masonry.api"
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [tool.ruff]
 target-version = "py310"
 
