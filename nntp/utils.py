@@ -190,6 +190,21 @@ def unparse_headers(hdrs: Mapping[str, str]) -> str:
     return "".join([_unparse_header(n, v) for n, v in hdrs.items()]) + "\r\n"
 
 
+def unparse_timestamp(timestamp: datetime) -> str:
+    """Format a NEWGROUPS/NEWNEWS timestamp in UTC with the NNTP GMT token.
+
+    Naive timestamps are interpreted as UTC, not as the local timezone.
+    """
+    if timestamp.utcoffset() is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    else:
+        timestamp = timestamp.astimezone(timezone.utc)
+    return (
+        f"{timestamp.year:04d}{timestamp.month:02d}{timestamp.day:02d} "
+        f"{timestamp.hour:02d}{timestamp.minute:02d}{timestamp.second:02d} GMT"
+    )
+
+
 def parse_date(value: str | int) -> datetime:
     """Parse a date as returned by the `DATE` command.
 

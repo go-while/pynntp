@@ -738,12 +738,7 @@ class NNTPClient(BaseNNTPClient):
         Note: If the datetime object supplied as the timestamp is naive (tzinfo
             is None) then it is assumed to be given as GMT.
         """
-        if timestamp.tzinfo:
-            ts = timestamp.astimezone(timezone.utc)
-        else:
-            ts = timestamp.replace(tzinfo=timezone.utc)
-
-        args = ts.strftime("%Y%m%d %H%M%S %Z")
+        args = utils.unparse_timestamp(timestamp)
 
         code, message = self.command("NEWGROUPS", args)
         if code != 231:
@@ -772,13 +767,7 @@ class NNTPClient(BaseNNTPClient):
             is None) then it is assumed to be given as GMT. If tzinfo is set
             then it will be converted to GMT by this function.
         """
-        if timestamp.tzinfo:
-            ts = timestamp.astimezone(timezone.utc)
-        else:
-            ts = timestamp.replace(tzinfo=timezone.utc)
-
-        args = pattern
-        args += " " + ts.strftime("%Y%m%d %H%M%S %Z")
+        args = f"{pattern} {utils.unparse_timestamp(timestamp)}"
 
         code, message = self.command("NEWNEWS", args)
         if code != 230:
