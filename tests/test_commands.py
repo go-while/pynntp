@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import binascii
+import zlib
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 import pytest
 
+import nntp
 from nntp.types import Newsgroup
 
 if TYPE_CHECKING:
@@ -93,3 +96,65 @@ def test_new_commands_use_gmt(
     else:
         assert list(client.newnews("local.*", timestamp)) == ["<a@example.test>"]
     assert server.received == ["MODE READER", command]
+
+
+def _yenczlib_headers() -> bytes:
+    deflate = zlib.compressobj(wbits=-15)
+    compressed = deflate.compress(b"1 subject\r\n") + deflate.flush()
+    encoded = bytearray()
+    for byte in compressed:
+        byte = (byte + 42) & 0xFF
+        if byte in (0, 10, 13, 61):
+            encoded.extend((61, (byte + 64) & 0xFF))
+        else:
+            encoded.append(byte)
+    if encoded.startswith(b"."):
+        encoded[:0] = b"."
+    return (
+        b"=ybegin line=128 size=%d name=headers\r\n" % len(compressed)
+        + encoded
+        + b"\r\n=yend size=%d crc32=%08x\r\n.\r\n"
+        % (len(compressed), binascii.crc32(compressed))
+    )
+
+
+@pytest.mark.parametrize("verb", ["HDR", "XHDR", "XZHDR", "XPAT"])
+def test_header_command_success_codes(scripted_server: Start, verb: str) -> None:
+    code = 225 if verb == "HDR" else 221
+    block = _yenczlib_headers() if verb == "XZHDR" else b"1 subject\r\n.\r\n"
+    server = scripted_server(
+        {
+            verb: f"{code} headers follow\r\n".encode() + block,
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client()
+    if verb == "XPAT":
+        assert list(client.xpat("Subject", 1, "*")) == ["1 subject"]
+    else:
+        values = list(getattr(client, verb.lower())("Subject", 1))
+        assert [(number, value.rstrip("\r\n")) for number, value in values] == [
+            (1, "subject")
+        ]
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("verb", ["HDR", "XHDR", "XZHDR", "XPAT"])
+def test_header_command_wrong_code_drained(scripted_server: Start, verb: str) -> None:
+    code = 221 if verb == "HDR" else 225
+    server = scripted_server(
+        {
+            verb: f"{code} unexpected headers\r\n1 subject\r\n.\r\n".encode(),
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client()
+    reply = (
+        client.xpat("Subject", 1, "*")
+        if verb == "XPAT"
+        else getattr(client, verb.lower())("Subject", 1)
+    )
+    with pytest.raises(nntp.NNTPReplyError) as error:
+        list(reply)
+    assert error.value.code == code
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
