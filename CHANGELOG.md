@@ -21,8 +21,9 @@ section before upgrading.
 - **One reply at a time.** A returned reply that is still held, unread or
   partly read, makes the next command raise `NNTPSyncError` until the reply is
   read to its end, closed with `close()` or dropped. Leaving a `for` loop over
-  it early is fine: the rest of the reply is read and dropped before the next
-  command.
+  a reply early is fine as long as nothing else refers to the iterator: the
+  rest of the reply is then read and dropped before the next command. An
+  iterator kept in a variable still blocks until you close or drop it.
 - **yEnc bodies are checked.** `body()` and `article()` check decoded yEnc data
   against the size and CRC (`pcrc32`, or `crc32` for single-part posts) of its
   `=yend` trailer, and raise `NNTPDataError` on a mismatch or a missing trailer
@@ -32,10 +33,13 @@ section before upgrading.
   front; above 1 MiB through a temporary file). NUL or bare CR in the body
   raises `NNTPDataError` and nothing is posted; before, a truncated article
   was posted.
-- **CR/LF/NUL are rejected** with `ValueError` in header names and values and
-  in command arguments and credentials, before anything is sent.
-- **Error types.** Timeouts raise `NNTPTimeoutError` (an `NNTPError` and a
-  `TimeoutError`) and close the connection; header, DATE and newsgroup parse
+- **Control characters are rejected** with `ValueError` before anything is
+  sent: CR and LF in header names and values, and CR, LF and NUL in commands,
+  their arguments and AUTHINFO credentials (checked before AUTHINFO USER).
+- **Error types.** Socket timeouts (connect, TLS handshake, sending, reading)
+  raise `NNTPTimeoutError` (an `NNTPError` and a `TimeoutError`) and close the
+  connection; a `TimeoutError` raised by your own body iterator while `post()`
+  prepares the article is passed through and the connection stays usable; header, DATE and newsgroup parse
   errors raise `NNTPDataError` instead of `ValueError`; a closed connection
   raises `NNTPError`.
 - **`PYNNTP_TLS_INSECURE`** turns certificate checks off only for `1`, `true`,
@@ -70,8 +74,11 @@ section before upgrading.
 - HDR expected code 221 instead of RFC 3977's 225.
 - Leaving a reply early (`break`, a single `next()`, an exception or a parse
   error) locked the client up; every later command raised `NNTPSyncError`.
-- An unexpected multi-line success code left its reply on the connection, so
-  the next command read stale data; it is now read and dropped first.
+- An unexpected multi-line success code (one of 100, 101, 215, 220-225, 230,
+  231) to a command whose reply is multi-line left that reply on the
+  connection, so the next command read stale data; it is now read and dropped
+  first. (211 and the obsolete 202 are not treated as multi-line, and the
+  single-line session commands such as AUTHINFO don't drain yet.)
 - `close()` and `quit()` can be called more than once; a `with` block closes the
   socket even if QUIT fails, and doesn't replace the block's own exception.
 - Sockets leaked when the greeting, TLS or MODE READER failed during setup.
