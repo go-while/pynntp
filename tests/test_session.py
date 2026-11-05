@@ -383,6 +383,46 @@ def test_login_does_not_interrupt_active_reply(scripted_server: Start) -> None:
     assert list(capabilities) == []
 
 
+@pytest.mark.parametrize("invalid", ["\r", "\n", "\0"])
+@pytest.mark.parametrize("in_verb", [True, False])
+def test_command_rejects_control_injection(
+    scripted_server: Start, invalid: str, *, in_verb: bool
+) -> None:
+    server = scripted_server({"DATE": b"111 20260102030405\r\n"})
+    client = server.client()
+    verb = f"GROUP{invalid}POST" if in_verb else "GROUP"
+    args = "local.test" if in_verb else f"local.test{invalid}POST"
+    with pytest.raises(ValueError, match="CR, LF or NUL"):
+        client.command(verb, args)
+    assert client.date().year == 2026
+    assert server.received == ["MODE READER", "DATE"]
+
+
+@pytest.mark.parametrize("invalid", ["\r", "\n", "\0"])
+@pytest.mark.parametrize("in_username", [True, False])
+def test_login_rejects_invalid_credentials_before_authinfo(
+    scripted_server: Start, invalid: str, *, in_username: bool
+) -> None:
+    server = scripted_server({"DATE": b"111 20260102030405\r\n"})
+    client = server.client()
+    username = f"user{invalid}DATE" if in_username else "user"
+    password = "pass" if in_username else f"pass{invalid}DATE"
+    with pytest.raises(ValueError, match="CR, LF or NUL"):
+        client.login(username, password)
+    assert client.date().year == 2026
+    assert server.received == ["MODE READER", "DATE"]
+
+
+def test_automatic_login_preflights_both_credentials(scripted_server: Start) -> None:
+    dates = iter([b"480 authenticate\r\n", b"111 20260102030405\r\n"])
+    server = scripted_server({"DATE": lambda _line: next(dates)})
+    client = server.client(username="user", password="pass\nDATE")  # noqa: S106
+    with pytest.raises(ValueError, match="CR, LF or NUL"):
+        client.date()
+    assert client.date().year == 2026
+    assert server.received == ["MODE READER", "DATE", "DATE"]
+
+
 def test_exception_closes_without_quit(scripted_server: Start) -> None:
     server = scripted_server()
     with pytest.raises(ValueError, match="user exception"), server.client() as client:
