@@ -1588,6 +1588,7 @@ class NNTPClient(BaseNNTPClient):
         Raises:
             NNTPDataError: If binary characters are detected in the message
                 body.
+            ValueError: If a header name or value contains CR or LF.
 
         Returns:
             A value that evaluates to true if posting the message succeeded.
