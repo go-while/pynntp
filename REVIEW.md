@@ -5,6 +5,40 @@
 > image (INN 2.7.2), or against the small scripted server in `review/probes/fake_server.py`. The rest
 > come from reading the code. Line numbers refer to upstream `main` at 82b9b2b.
 
+## Status on develop-01 (2026-11-05)
+
+Fixed on the fork's `develop-01` branch, each with offline regression tests against a scripted server and,
+where possible, tests against INN 2.6.4 and 2.7.4. Every change was reviewed and verified by two other agents
+before it was merged. The merge commits are in `git log --first-parent develop-01`.
+
+| Item | Status | Merge |
+|---|---|---|
+| Bug 1: dot-unstuffing (#99), plus gzip replies read to their end | fixed | 56f765e |
+| Bug 2: LIST ACTIVE / NEWGROUPS high and low | fixed | 387c249 |
+| Bug 3: NEWGROUPS / NEWNEWS send `GMT` | fixed | e0e48f6 |
+| Bug 4: HDR expects 225; unexpected multi-line codes drained | fixed | c4c81ef |
+| Bug 5: abandoned or failed replies lock the client | fixed | 1b5c877 |
+| Bug 6: `close()` / `quit()` / `__exit__` | fixed | 64acff4 |
+| Bug 7: MODE READER before STARTTLS, buffer cleared, no AUTHINFO before TLS | fixed (CAPABILITIES re-read deferred) | 53f273d |
+| Bug 8: CR/LF injection in headers | fixed | 7f1ea38 |
+| Bug 8: CR/LF injection in command arguments | open (B5) | |
+| Bugs 9, 10: POST truncation, Message-ID from 240 | fixed | ee9af71 |
+| Bug 11: AUTHINFO | in review (B4) | |
+| Bug 12: XHDR values and message-id form | fixed | 3fd109e |
+| Bug 13: socket leaks on failed setup | fixed | c08d9b0 |
+| Low: yEnc size/CRC check, text after `=yend` | fixed | b4b2208, 9ab7270 |
+| Low: `ValueError` from parsers | fixed | 9ab7270, 3c14d66 |
+| Low: `:full` overview fields keep their label | fixed | 3c14d66 |
+| Low: LIST EXTENSIONS 202 vs 501 | documented (obsolete; use CAPABILITIES) | 3c14d66 |
+| Missing: STAT, LISTGROUP, OVER (#43, #45, #46) | added | 9799bbf |
+| Tests: offline scripted-server tests, integration tests opt-in, ARTICLE test independent of numbering | done | 6a4fa47, 7926aa2, d40752c |
+| Packaging: PEP 621, Python >= 3.10, `py.typed`, tests in the sdist (#74), refreshed lock | done | 347c2a1, 2387beb |
+| CI: lint + Python 3.10-3.14 against Ubuntu's inn2 on every work branch | done | 9947800 |
+| README example and command list | fixed | f1a67ba |
+
+Still open: B5 (command arguments), B6 (TLS options, timeouts as `NNTPError`, exports), C9 (unexpected codes
+everywhere), the `__main__` demo block, the publish workflow, COMPRESS DEFLATE (#41), IHAVE (#42).
+
 ## Summary
 
 pynntp is small: one 1.4k-line `nntp/nntp.py` plus helpers, typed and readable. The protocol layer has
