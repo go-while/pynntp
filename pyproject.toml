@@ -32,6 +32,7 @@ packages = [{ include = "nntp" }]
 include = [
     { path = "tests", format = "sdist" },
     { path = "changes", format = "sdist" },
+    { path = "CHANGELOG.md", format = "sdist" },
 ]
 
 [tool.poetry.group.dev.dependencies]
