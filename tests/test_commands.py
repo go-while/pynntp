@@ -302,13 +302,16 @@ def test_header_command_wrong_code_drained(scripted_server: Start, verb: str) ->
         }
     )
     client = server.client()
-    reply = (
-        client.xpat("Subject", 1, "*")
-        if verb == "XPAT"
-        else getattr(client, verb.lower())("Subject", 1)
-    )
+
+    def call() -> Iterator[object]:
+        return (
+            client.xpat("Subject", 1, "*")
+            if verb == "XPAT"
+            else getattr(client, verb.lower())("Subject", 1)
+        )
+
     with pytest.raises(nntp.NNTPReplyError) as error:
-        list(reply)
+        call()
     assert error.value.code == code
     assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 
@@ -992,3 +995,158 @@ def test_ihave_preflights_before_offer_and_keeps_header_id(
         is True
     )
     assert server.articles == [[b"Message-ID: <different@b>\r\n", b"\r\n", b"body\r\n"]]
+
+
+EAGER_COMMANDS = [
+    (
+        "newgroups",
+        "NEWGROUPS",
+        (datetime(2026, 1, 1, tzinfo=timezone.utc),),
+        231,
+        b"local.test 2 1 y\r\n",
+    ),
+    (
+        "newnews",
+        "NEWNEWS",
+        ("local.*", datetime(2026, 1, 1, tzinfo=timezone.utc)),
+        230,
+        b"<a@b>\r\n",
+    ),
+    ("list", "LIST", (), 215, b"local.test 2 1 y\r\n"),
+    ("list_active", "LIST ACTIVE", (), 215, b"local.test 2 1 y\r\n"),
+    ("list_active_times", "LIST ACTIVE.TIMES", (), 215, b"local.test 123 tester\r\n"),
+    ("list_headers", "LIST HEADERS", (), 215, b"Subject\r\n"),
+    ("list_newsgroups", "LIST NEWSGROUPS", (), 215, b"local.test description\r\n"),
+    ("list_overview_fmt", "LIST OVERVIEW.FMT", (), 215, b"Subject:\r\n"),
+    ("list_extensions", "LIST EXTENSIONS", (), 202, b"OVER\r\n"),
+    ("listgroup", "LISTGROUP", (), 211, b"1\r\n"),
+    ("hdr", "HDR", ("Subject",), 225, b"1 subject\r\n"),
+    ("xhdr", "XHDR", ("Subject",), 221, b"1 subject\r\n"),
+    ("xzhdr", "XZHDR", ("Subject",), 221, b"1 subject\r\n"),
+    ("over", "OVER", (), 224, b"1\tsubject\r\n"),
+    ("xover", "XOVER", (), 224, b"1\tsubject\r\n"),
+    ("xzver", "XZVER", (), 224, b"1\tsubject\r\n"),
+    ("xpat", "XPAT", ("Subject", 1, "*"), 221, b"1 subject\r\n"),
+]
+
+
+@pytest.mark.parametrize(("method", "command", "args", "code", "text"), EAGER_COMMANDS)
+@pytest.mark.parametrize("action", ["consume", "drop", "close"])
+def test_iterator_commands_send_at_call_and_own_reply(
+    scripted_server: Start,
+    method: str,
+    command: str,
+    args: tuple[object, ...],
+    code: int,
+    text: bytes,
+    action: str,
+) -> None:
+    metadata = "1 1 1 local.test" if method == "listgroup" else "reply"
+    block = _yenczlib_headers(text) if method in ("xzhdr", "xzver") else text + b".\r\n"
+    server = scripted_server(
+        {
+            command: f"{code} {metadata}\r\n".encode() + block,
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client(reader=False)
+    client.overview_fmt = ("Subject",)
+    reply = getattr(client, method)(*args)
+    assert len(server.received) == 1
+    assert server.received[0].startswith(command)
+    with pytest.raises(nntp.nntp.NNTPSyncError):
+        client.date()
+    if action == "consume":
+        assert len(list(reply)) == 1
+    elif action == "close":
+        reply.close()  # An unstarted parsing wrapper must release its source.
+    else:
+        del reply
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
+    ("method", "command", "args", "_code", "_text"), EAGER_COMMANDS
+)
+def test_iterator_command_errors_raise_at_call(
+    scripted_server: Start,
+    method: str,
+    command: str,
+    args: tuple[object, ...],
+    _code: int,
+    _text: bytes,
+) -> None:
+    server = scripted_server({command: b"500 unavailable\r\n"})
+    client = server.client(reader=False)
+    client.overview_fmt = ("Subject",)
+    with pytest.raises(nntp.NNTPPermanentError, match="500"):
+        getattr(client, method)(*args)
+
+
+def test_eager_parser_error_releases_reply_with_live_traceback(
+    scripted_server: Start,
+) -> None:
+    server = scripted_server(
+        {
+            "LIST ACTIVE": b"215 list\r\nmalformed\r\nlocal.test 2 1 y\r\n.\r\n",
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client(reader=False)
+    reply = client.list_active()
+    with pytest.raises(nntp.NNTPDataError) as error:
+        next(reply)
+    assert error.value.__traceback__ is not None
+    # Hold both the failed iterator and its exception, including traceback.
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+def test_eager_started_iterator_close_releases_source(scripted_server: Start) -> None:
+    server = scripted_server(
+        {
+            "LIST ACTIVE": b"215 list\r\nlocal.one 2 1 y\r\nlocal.two 3 1 y\r\n.\r\n",
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client(reader=False)
+    reply = client.list_active()
+    assert next(reply).name == "local.one"
+    assert hasattr(reply, "close")
+    reply.close()
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(("method", "command", "args", "code", "_text"), EAGER_COMMANDS)
+def test_eager_empty_reply_is_streamed(
+    scripted_server: Start,
+    method: str,
+    command: str,
+    args: tuple[object, ...],
+    code: int,
+    _text: bytes,
+) -> None:
+    metadata = "0 0 0 local.empty" if method == "listgroup" else "empty"
+    block = _yenczlib_headers(b"") if method in ("xzhdr", "xzver") else b".\r\n"
+    server = scripted_server(
+        {
+            command: f"{code} {metadata}\r\n".encode() + block,
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client(reader=False)
+    client.overview_fmt = ("Subject",)
+    reply = getattr(client, method)(*args)
+    assert len(server.received) == 1
+    assert list(reply) == []
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+def test_eager_command_does_not_read_reply_data_at_call(scripted_server: Start) -> None:
+    server = scripted_server(
+        {"LIST ACTIVE": [b"215 list\r\n", 60.0, b"local.test 2 1 y\r\n.\r\n"]}
+    )
+    client = server.client(reader=False, timeout=0.1)
+    reply = client.list_active()  # Reading even one data line here would time out.
+    assert server.received == ["LIST ACTIVE"]
+    client.close()
+    del reply

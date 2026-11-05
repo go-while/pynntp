@@ -29,7 +29,7 @@ import weakref
 import zlib
 from collections.abc import Iterator
 from functools import cached_property
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Generic, Literal, TypeVar
 
 from . import utils
 from .fifo import BytesFifo
@@ -763,6 +763,52 @@ class BaseNNTPClient:
         self.socket.close()
 
 
+_CommandValue = TypeVar("_CommandValue")
+
+
+class _CommandReply(Generic[_CommandValue]):
+    """A streamed C-command parser owning an already-registered raw reply.
+
+    No client cache owns this wrapper. Dropping it releases the raw handle so
+    the next command drains; explicit close and parser failures drain at once,
+    even when this wrapper or its exception traceback is still held.
+    """
+
+    def __init__(
+        self,
+        reply: _Reply,
+        parse: Callable[[str], _CommandValue],
+        encoding: str,
+        errors: str,
+    ) -> None:
+        self._reply: _Reply | None = reply
+        self._parse = parse
+        self._encoding = encoding
+        self._errors = errors
+
+    def __iter__(self) -> Self:
+        return self
+
+    def __next__(self) -> _CommandValue:
+        if self._reply is None:
+            raise StopIteration
+        try:
+            line = next(self._reply).decode(self._encoding, self._errors)
+            return self._parse(line)
+        except StopIteration:
+            self._reply = None
+            raise
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self) -> None:
+        """Drain the reply and release it, including before first iteration."""
+        reply, self._reply = self._reply, None
+        if reply is not None:
+            reply.close()
+
+
 class NNTPClient(BaseNNTPClient):
     """NNTP NNTPClient.
 
@@ -997,8 +1043,31 @@ class NNTPClient(BaseNNTPClient):
 
         return "".join(self.info(code, message))
 
+    def _command_reply(
+        self,
+        code: int,
+        message: str,
+        parse: Callable[[str], _CommandValue],
+        *,
+        yz: bool = False,
+    ) -> Iterator[_CommandValue]:
+        """Register a reply now, returning an owning streaming parser."""
+        return _CommandReply(
+            self._info(code, message, yz), parse, self.encoding, self.errors
+        )
+
+    @staticmethod
+    def _parse_newsgroup(line: str) -> Newsgroup:
+        try:
+            return utils.parse_newsgroup(line)
+        except ValueError as exc:
+            raise NNTPDataError(str(exc)) from exc
+
     def newgroups(self, timestamp: datetime) -> Iterator[Newsgroup]:
         """NEWGROUPS command.
+
+        Sends immediately. Consume, close or drop the returned iterator before
+        another command; retaining it unread raises NNTPSyncError on that command.
 
         Retrieves a list of newsgroups created on the server since the
         specified timestamp.
@@ -1021,15 +1090,13 @@ class NNTPClient(BaseNNTPClient):
         if code != 231:
             raise self._unexpected(code, message)
 
-        for line in self.info(code, message):
-            try:
-                group = utils.parse_newsgroup(line)
-            except ValueError as exc:
-                raise NNTPDataError(str(exc)) from exc
-            yield group
+        return self._command_reply(code, message, self._parse_newsgroup)
 
     def newnews(self, pattern: str, timestamp: datetime) -> Iterator[str]:
         """NEWNEWS command.
+
+        Sends immediately. Consume, close or drop the returned iterator before
+        another command; retaining it unread raises NNTPSyncError on that command.
 
         Retrieves a list of message-ids for articles created since the
         specified timestamp for newsgroups with names that match the given
@@ -1054,8 +1121,7 @@ class NNTPClient(BaseNNTPClient):
         if code != 230:
             raise self._unexpected(code, message)
 
-        for line in self.info(code, message):
-            yield line.strip()
+        return self._command_reply(code, message, str.strip)
 
     # list commands
     def list(
@@ -1066,6 +1132,9 @@ class NNTPClient(BaseNNTPClient):
         success: Iterable[int] = (215,),
     ) -> Iterator[str]:
         """LIST command.
+
+        Sends immediately. Consume, close or drop the returned iterator before
+        another command; retaining it unread raises NNTPSyncError on that command.
 
         General purpose list command. allows the server to provide blocks of
         information to the client. The keyword specifies the type of list, if no
@@ -1089,10 +1158,12 @@ class NNTPClient(BaseNNTPClient):
         if code not in success:
             raise self._unexpected(code, message)
 
-        return self.info(code, message)
+        return self._command_reply(code, message, lambda line: line)
 
     def list_active(self, pattern: str | None = None) -> Iterator[Newsgroup]:
         """LIST ACTIVE command.
+
+        Sends immediately; the returned iterator has the ownership rules of list().
 
         Retrieves a list of active newsgroups that match the specified pattern.
 
@@ -1105,15 +1176,15 @@ class NNTPClient(BaseNNTPClient):
             A 4-tuple containing the name, low water mark, high water mark,
             and status for the newsgroup, for each newsgroup.
         """
-        for line in self.list("ACTIVE", args=pattern):
-            try:
-                group = utils.parse_newsgroup(line)
-            except ValueError as exc:
-                raise NNTPDataError(str(exc)) from exc
-            yield group
+        code, message = self.command("LIST ACTIVE", pattern)
+        if code != 215:
+            raise self._unexpected(code, message)
+        return self._command_reply(code, message, self._parse_newsgroup)
 
     def list_active_times(self) -> Iterator[tuple[str, datetime, str]]:
         """LIST ACTIVE TIMES command.
+
+        Sends immediately; the returned iterator has the ownership rules of list().
 
         Retrieves a list of newsgroups including the creation time and who
         created them.
@@ -1124,7 +1195,8 @@ class NNTPClient(BaseNNTPClient):
             A 3-tuple containing the name, creation date as a datetime object
             and creator as a string for the newsgroup for each newsgroup.
         """
-        for line in self.list("ACTIVE.TIMES"):
+
+        def parse(line: str) -> tuple[str, datetime, str]:
             parts = line.split()
             try:
                 name = parts[0]
@@ -1132,12 +1204,19 @@ class NNTPClient(BaseNNTPClient):
                 creator = parts[2]
             except (IndexError, ValueError):
                 raise NNTPDataError("Invalid LIST ACTIVE.TIMES")
-            yield name, timestamp, creator
+            return name, timestamp, creator
+
+        code, message = self.command("LIST ACTIVE.TIMES")
+        if code != 215:
+            raise self._unexpected(code, message)
+        return self._command_reply(code, message, parse)
 
     def list_headers(
         self, variant: Literal["MSGID", "RANGE"] | None = None
     ) -> Iterator[str]:
         """LIST HEADERS command.
+
+        Sends immediately; the returned iterator has the ownership rules of list().
 
         Returns a list of fields that may be retrieved using the HDR command.
 
@@ -1151,14 +1230,18 @@ class NNTPClient(BaseNNTPClient):
         Yields:
             The field name for each of the fields.
         """
-        for line in self.list("HEADERS", args=variant):
-            yield line.strip()
+        code, message = self.command("LIST HEADERS", variant)
+        if code != 215:
+            raise self._unexpected(code, message)
+        return self._command_reply(code, message, str.strip)
 
     def list_newsgroups(
         self,
         pattern: str | None = None,
     ) -> Iterator[tuple[str, str]]:
         """LIST NEWSGROUPS command.
+
+        Sends immediately; the returned iterator has the ownership rules of list().
 
         Retrieves a list of newsgroups including the name and a short
         description.
@@ -1172,15 +1255,23 @@ class NNTPClient(BaseNNTPClient):
             A tuple containing the name, and description for the newsgroup, for
             each newsgroup that matches the pattern.
         """
-        for line in self.list("NEWSGROUPS", args=pattern):
+
+        def parse(line: str) -> tuple[str, str]:
             parts = line.strip().split(None, 1)
             name, description = parts[0], ""
             if len(parts) > 1:
                 description = parts[1]
-            yield name, description
+            return name, description
+
+        code, message = self.command("LIST NEWSGROUPS", pattern)
+        if code != 215:
+            raise self._unexpected(code, message)
+        return self._command_reply(code, message, parse)
 
     def list_overview_fmt(self) -> Iterator[tuple[str, bool]]:
         """LIST OVERVIEW.FMT command.
+
+        Sends immediately; the returned iterator has the ownership rules of list().
 
         Returns a description of the fields in the database for which it is
         consistent.
@@ -1192,7 +1283,8 @@ class NNTPClient(BaseNNTPClient):
             the the field name is included in the field data, for each field in
             the database which is consistent, fields are yielded in order.
         """
-        for line in self.list("OVERVIEW.FMT"):
+
+        def parse(line: str) -> tuple[str, bool]:
             try:
                 name, suffix = line.rstrip().split(":")
             except ValueError:
@@ -1201,10 +1293,17 @@ class NNTPClient(BaseNNTPClient):
                 name, suffix = suffix, name
             if suffix and suffix.casefold() != "full":
                 raise NNTPDataError("Invalid LIST OVERVIEW.FMT")
-            yield (name, suffix.casefold() == "full")
+            return name, suffix.casefold() == "full"
+
+        code, message = self.command("LIST OVERVIEW.FMT")
+        if code != 215:
+            raise self._unexpected(code, message)
+        return self._command_reply(code, message, parse)
 
     def list_extensions(self) -> Iterator[str]:
         """LIST EXTENSIONS command.
+
+        Sends immediately; the returned iterator has the ownership rules of list().
 
         Allows a client to determine which extensions are supported by the
         server at any given time.
@@ -1218,8 +1317,10 @@ class NNTPClient(BaseNNTPClient):
         Yields:
             The name of the extension of each of the available extensions.
         """
-        for line in self.list("EXTENSIONS", success=(202,)):
-            yield line.strip()
+        code, message = self.command("LIST EXTENSIONS")
+        if code != 202:
+            raise self._unexpected(code, message)
+        return self._command_reply(code, message, str.strip)
 
     def group(self, name: str) -> tuple[int, int, int, str]:
         """GROUP command.
@@ -1261,6 +1362,9 @@ class NNTPClient(BaseNNTPClient):
     ) -> Iterator[int]:
         """LISTGROUP command: select a group and yield its article numbers.
 
+        Sends immediately. Consume, close or drop the returned iterator before
+        another command; retaining it unread raises NNTPSyncError on that command.
+
         With no name, use the currently selected group. A range requires an
         explicit group name because the wire grammar is ``group [range]``.
         The 211 status metadata is validated but only article numbers are
@@ -1287,14 +1391,17 @@ class NNTPClient(BaseNNTPClient):
         except ValueError as exc:
             self._info(code, message).close()
             raise NNTPDataError(f'Invalid LISTGROUP status "{message}"') from exc
-        for line in self.info(code, message):
+
+        def parse(line: str) -> int:
             try:
                 number = int(line)
                 if number <= 0:
                     raise ValueError("Article numbers must be positive")
             except ValueError as exc:
                 raise NNTPDataError("Invalid LISTGROUP article number") from exc
-            yield number
+            return number
+
+        return self._command_reply(code, message, parse)
 
     def next(self) -> tuple[int, str]:
         """NEXT command.
@@ -1581,15 +1688,16 @@ class NNTPClient(BaseNNTPClient):
         if code != success:
             raise self._unexpected(code, message)
 
-        yz = verb == "XZHDR"
-        for line in self.info(code, message, yz=yz):
+        def parse(line: str) -> tuple[int, str]:
             parts = line.rstrip("\r\n").split(None, 1)
             try:
                 articleno = 0 if parts[0] == requested_id else int(parts[0])
                 value = parts[1] if len(parts) > 1 else ""
             except (IndexError, ValueError):
                 raise NNTPDataError(f"Invalid {verb} response")
-            yield articleno, value
+            return articleno, value
+
+        return self._command_reply(code, message, parse, yz=verb == "XZHDR")
 
     def hdr(
         self,
@@ -1597,6 +1705,9 @@ class NNTPClient(BaseNNTPClient):
         msgid_range: str | Range | None = None,
     ) -> Iterator[tuple[int, str]]:
         """HDR command.
+
+        Sends immediately. Consume, close or drop the returned iterator before
+        another command; retaining it unread raises NNTPSyncError on that command.
 
         Provides access to specific fields from an article specified by
         message-id, or from a specified article or range of articles in the
@@ -1629,6 +1740,8 @@ class NNTPClient(BaseNNTPClient):
     ) -> Iterator[tuple[int, str]]:
         """Generator for the XHDR command.
 
+        Sends immediately; the returned iterator has the ownership rules of hdr().
+
         See hdr(). Values exclude their wire CRLF terminators. For a message-id
         request, an echoed matching identifier is returned as article number 0,
         like HDR. Numeric article selectors retain their server article numbers.
@@ -1641,6 +1754,8 @@ class NNTPClient(BaseNNTPClient):
         msgid_range: str | Range | None = None,
     ) -> Iterator[tuple[int, str]]:
         """Generator for the XZHDR command.
+
+        Sends immediately; the returned iterator has the ownership rules of hdr().
 
         The compressed version of XHDR. See xhdr().
 
@@ -1688,8 +1803,7 @@ class NNTPClient(BaseNNTPClient):
         if code != 224:
             raise self._unexpected(code, message)
 
-        yz = verb == "XZVER"
-        for line in self.info(code, message, yz=yz):
+        def parse(line: str) -> tuple[int, HeaderDict]:
             parts = line.rstrip("\r\n").split("\t")
             try:
                 articleno = int(parts[0])
@@ -1703,12 +1817,17 @@ class NNTPClient(BaseNNTPClient):
                 overview = HeaderDict(fields)
             except (IndexError, ValueError):
                 raise NNTPDataError(f"Invalid {verb} response")
-            yield articleno, overview
+            return articleno, overview
+
+        return self._command_reply(code, message, parse, yz=verb == "XZVER")
 
     def over(
         self, msgid_range: str | Range | None = None
     ) -> Iterator[tuple[int, HeaderDict]]:
         """OVER command: yield article numbers and overview fields.
+
+        Sends immediately. Consume, close or drop the returned iterator before
+        another command; retaining it unread raises NNTPSyncError on that command.
 
         Accept a Message-ID, article number, range tuple or None for the
         current article. Results use the same overview parsing as xover(),
@@ -1724,6 +1843,8 @@ class NNTPClient(BaseNNTPClient):
         range: Range | None = None,
     ) -> Iterator[tuple[int, HeaderDict]]:
         """XOVER command.
+
+        Sends immediately; the returned iterator has the ownership rules of over().
 
         The XOVER command returns information from the overview database for
         the article(s) specified.
@@ -1756,6 +1877,8 @@ class NNTPClient(BaseNNTPClient):
     ) -> Iterator[tuple[int, HeaderDict]]:
         """XZVER command.
 
+        Sends immediately; the returned iterator has the ownership rules of over().
+
         The compressed version of XHDR. See xover().
         """
         return self._xover(range, verb="XZVER")
@@ -1767,6 +1890,9 @@ class NNTPClient(BaseNNTPClient):
         *pattern: str,
     ) -> Iterator[str]:
         """XPAT command.
+
+        Sends immediately. Consume, close or drop the returned iterator before
+        another command; retaining it unread raises NNTPSyncError on that command.
 
         Used to retrieve specific headers from specific articles, based on
         pattern matching on the contents of the header.
@@ -1793,8 +1919,7 @@ class NNTPClient(BaseNNTPClient):
         if code != 221:
             raise self._unexpected(code, message)
 
-        for line in self.info(code, message):
-            yield line.strip()
+        return self._command_reply(code, message, str.strip)
 
     def xfeature_compress_gzip(self, terminator: bool = False) -> bool:
         """XFEATURE COMPRESS GZIP command."""
