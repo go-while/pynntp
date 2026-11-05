@@ -1,0 +1,2 @@
+Fixed: leaving a multi-line reply early (break, next() once, an exception in the loop or a parse error) locked the client up: every later command raised NNTPSyncError, and a with block raised on exit. The rest of the reply is now read and dropped before the next command.
+Fixed: article() and the XZVER/XZHDR decoder read one reply through two generators; an error in the headers left the body on the connection.

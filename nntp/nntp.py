@@ -22,10 +22,11 @@ import io
 import os
 import socket
 import ssl
+import weakref
 import zlib
 from datetime import datetime, timezone
 from functools import cached_property
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Callable, Literal
 
 from . import utils
 from .fifo import BytesFifo
@@ -110,6 +111,44 @@ class NNTPDataError(NNTPError):
 
     Data errors are raised when the content of a response cannot be parsed.
     """
+
+
+# Status codes that start a multi-line reply (RFC 3977 section 3.2). 211 is
+# multi-line only for LISTGROUP, so it is left out.
+_MULTILINE_CODES = frozenset({100, 101, 215, 220, 221, 222, 224, 225, 230, 231})
+
+
+def _no_reply() -> _Reply | None:
+    return None
+
+
+class _Reply:
+    """The lines of one multi-line reply, as returned by ``_info()``.
+
+    The client keeps the line source itself and only a weak reference to this
+    object. When nobody holds it any more (the reader finished, left its loop
+    early or failed), the client reads and drops the rest of the reply before
+    the next command, so the connection stays usable.
+    """
+
+    def __init__(self, client: BaseNNTPClient, source: Iterator[bytes]) -> None:
+        self._client = client
+        self._source = source
+
+    def __iter__(self) -> Self:
+        return self
+
+    def __next__(self) -> bytes:
+        try:
+            return next(self._source)
+        except BaseException:
+            # the reply is complete (StopIteration) or its source failed
+            self._client._end_reply(self._source)  # noqa: SLF001
+            raise
+
+    def close(self) -> None:
+        """Read and drop the rest of the reply now."""
+        self._client._drain_reply(self._source)  # noqa: SLF001
 
 
 def _inflate(inflate: zlib._Decompress, data: bytes) -> bytes:
@@ -303,16 +342,12 @@ class BaseNNTPClient:
             NNTPError: If data is required to be read from the socket and
                 fails.
         """
-        self._generating = True
-
         for line in self._line():
             if line == b".\r\n":
                 break
             if line.startswith(b"."):
                 line = line[1:]
             yield line
-
-        self._generating = False
 
     def _info_gzip(self) -> Iterator[bytes]:
         """Generator for the lines of a compressed info (textual) response.
@@ -340,8 +375,6 @@ class BaseNNTPClient:
                 fails.
             NNTPDataError: If decompression fails.
         """
-        self._generating = True
-
         inflate = zlib.decompressobj(15 + 32)
 
         done, buf = False, BytesFifo()
@@ -351,7 +384,7 @@ class BaseNNTPClient:
                 # the terminator follows the compressed data
                 buf.write(data)
             else:
-                buf.write(_inflate(inflate, data))
+                buf.write(self._inflate_or_close(inflate, data))
                 if inflate.eof:
                     # whatever came after the end of the gzip stream, once
                     buf.write(inflate.unused_data)
@@ -372,7 +405,7 @@ class BaseNNTPClient:
             # for the next reply. Whatever follows the stream is that reply.
             buf.clear()
             while not inflate.eof:
-                _inflate(inflate, next(self._buf()))
+                self._inflate_or_close(inflate, next(self._buf()))
             rest = inflate.unused_data
         if rest:
             buffer = BytesFifo()
@@ -380,7 +413,17 @@ class BaseNNTPClient:
             buffer.write(self._buffer.read())
             self._buffer = buffer
 
-        self._generating = False
+    def _inflate_or_close(self, inflate: zlib._Decompress, data: bytes) -> bytes:
+        """Decompress part of a gzip reply; close the connection if corrupt.
+
+        The end of a corrupt compressed reply can't be found, so the
+        connection can't be used for further commands.
+        """
+        try:
+            return _inflate(inflate, data)
+        except NNTPDataError:
+            self.socket.close()
+            raise NNTPDataError("Decompression failed, connection closed")
 
     def _info_yenczlib(self) -> Iterator[bytes]:
         """Generator for the lines of a compressed info (textual) response.
@@ -408,26 +451,29 @@ class BaseNNTPClient:
         decoder = YEnc()
         inflate = zlib.decompressobj(-15)
 
-        # header
-        header = next(self._info_plain())
-        if not header.startswith(b"=ybegin"):
-            raise NNTPDataError("Bad yEnc header")
+        # one iterator for the whole reply: header, data and trailer
+        lines = self._info_plain()
+        try:
+            # header
+            header = next(lines, b"")
+            if not header.startswith(b"=ybegin"):
+                raise NNTPDataError("Bad yEnc header")
 
-        # data
-        buf, trailer = BytesFifo(), b""
-        for line in self._info_plain():
-            if line.startswith(b"=yend"):
-                trailer = line
-                continue
-            data = decoder.decode(line)
-            try:
-                data = inflate.decompress(data)
-            except zlib.error:
-                raise NNTPDataError("Decompression failed")
-            if not data:
-                continue
-            buf.write(data)
-            yield from buf
+            # data
+            buf, trailer = BytesFifo(), b""
+            for line in lines:
+                if line.startswith(b"=yend"):
+                    trailer = line
+                    continue
+                data = _inflate(inflate, decoder.decode(line))
+                if not data:
+                    continue
+                buf.write(data)
+                yield from buf
+        except NNTPDataError:
+            for _ in lines:  # read the rest of the reply
+                pass
+            raise
 
         # trailer
         if not trailer:
@@ -442,7 +488,62 @@ class BaseNNTPClient:
         if crc32 != decoder.crc32:
             raise NNTPDataError("Bad yEnc CRC")
 
-    def _info(self, code: int, message: str, yz: bool = False) -> Iterator[bytes]:
+    @property
+    def _generating(self) -> bool:
+        """True while a multi-line reply is still being read.
+
+        A reply that nobody holds any more is read to its end and dropped
+        here, so that the next command can be sent.
+        """
+        if self._reply_source is None:
+            return False
+        if self._reply_handle() is not None:
+            return True
+        self._drain_reply(self._reply_source)
+        return False
+
+    @_generating.setter
+    def _generating(self, value: bool) -> None:
+        # only "no reply in progress" can be set (by __init__)
+        if value:
+            msg = "_generating can only be set to False"
+            raise ValueError(msg)
+        self._reply_source: Iterator[bytes] | None = None
+        self._reply_handle: Callable[[], _Reply | None] = _no_reply
+
+    def _end_reply(self, source: Iterator[bytes]) -> None:
+        """Mark the reply read by ``source`` as complete."""
+        if self._reply_source is source:
+            self._generating = False
+
+    def _drain_reply(self, source: Iterator[bytes]) -> None:
+        """Read and drop the rest of the reply read by ``source``."""
+        if self._reply_source is not source:
+            return
+        try:
+            for _ in source:
+                pass
+        except NNTPDataError:
+            # Bad data (e.g. a yEnc CRC) after the reply was read to its end
+            # is not the next command's business. If the end couldn't be
+            # found, the connection was closed: say so.
+            if self.socket.fileno() == -1:
+                raise
+        finally:
+            self._end_reply(source)
+
+    def _unexpected(self, code: int, message: str) -> NNTPReplyError:
+        """Return the error for an unexpected success code of a command.
+
+        If the code starts a multi-line reply, the reply is read and dropped
+        first, so the connection stays usable. Use: ``raise
+        self._unexpected(code, message)``.
+        """
+        if code in _MULTILINE_CODES:
+            self._info(code, message).close()
+        return NNTPReplyError(code, message)
+
+    def _info(self, code: int, message: str, yz: bool = False) -> _Reply:
         """Dispatcher for the info generators.
 
         Determines which _info_*() generator should be used based on the
@@ -453,12 +554,24 @@ class BaseNNTPClient:
             message: The status message for the command response.
             yz: Use yenzlib decompression. Useful for xz* commands.
 
-        Yields:
-            A lines of the info response as bytes.
+        Returns:
+            An iterator over the lines of the info response as bytes. Its
+            close() method drops the rest of the reply.
+
+        Raises:
+            NNTPSyncError: If another reply is still being read.
         """
+        if self._generating:
+            raise NNTPSyncError("Another reply is still being read")
+        source: Iterator[bytes]
         if "COMPRESS=GZIP" in message:
-            return self._info_gzip()
-        return self._info_yenczlib() if yz else self._info_plain()
+            source = self._info_gzip()
+        else:
+            source = self._info_yenczlib() if yz else self._info_plain()
+        reply = _Reply(self, source)
+        self._reply_source = source
+        self._reply_handle = weakref.ref(reply)
+        return reply
 
     def info(self, code: int, message: str, yz: bool = False) -> Iterator[str]:
         """Dispatcher for the info generators.
@@ -471,10 +584,16 @@ class BaseNNTPClient:
             message: The status message for the command response.
             yz: Use yenzlib decompression. Useful for xz* commands.
 
-        Yields:
-            A line of the info response as a string.
+        Returns:
+            An iterator over the lines of the info response as strings. The
+            reply counts as being read from the moment info() returns until
+            the iterator is exhausted or dropped.
         """
-        for line in self._info(code, message, yz):
+        return self._decode(self._info(code, message, yz))
+
+    def _decode(self, lines: Iterable[bytes]) -> Iterator[str]:
+        """Decode lines of bytes to str."""
+        for line in lines:
             yield line.decode(self.encoding, self.errors)
 
     def command(self, verb: str, args: str | None = None) -> tuple[int, str]:
@@ -1024,12 +1143,12 @@ class NNTPClient(BaseNNTPClient):
         return article, msgid
 
     # TODO: Validate yEnc
-    def _body(self, code: int, message: str, decode: bool | None = None) -> bytes:
+    def _body(self, lines: Iterator[bytes], decode: bool | None = None) -> bytes:
         decoder = YEnc()
 
         # read the body
         body: list[bytes] = []
-        for line in self._info(code, message):
+        for line in lines:
             # detect yenc
             if decode is None:
                 if line.startswith(b"=y"):
@@ -1091,14 +1210,17 @@ class NNTPClient(BaseNNTPClient):
         except ValueError:
             raise NNTPProtocolError(message)
 
-        # headers
-        headers = utils.parse_headers(self.info(code, message))
+        # headers and body come from one reply, so read both from one iterator
+        lines = self._info(code, message)
+        try:
+            headers = utils.parse_headers(self._decode(lines))
 
-        if decode is None and "yEnc" in headers.get("subject", ""):
-            decode = True
+            if decode is None and "yEnc" in headers.get("subject", ""):
+                decode = True
 
-        # body
-        body = self._body(code, message, decode=decode)
+            body = self._body(lines, decode=decode)
+        finally:
+            lines.close()
 
         return articleno, headers, body
 
@@ -1129,7 +1251,11 @@ class NNTPClient(BaseNNTPClient):
         if code != 221:
             raise NNTPReplyError(code, message)
 
-        return utils.parse_headers(self.info(code, message))
+        lines = self._info(code, message)
+        try:
+            return utils.parse_headers(self._decode(lines))
+        finally:
+            lines.close()
 
     def body(
         self,
@@ -1164,7 +1290,11 @@ class NNTPClient(BaseNNTPClient):
         if code != 222:
             raise NNTPReplyError(code, message)
 
-        return self._body(code, message, decode=decode)
+        lines = self._info(code, message)
+        try:
+            return self._body(lines, decode=decode)
+        finally:
+            lines.close()
 
     def _hdr(
         self,
