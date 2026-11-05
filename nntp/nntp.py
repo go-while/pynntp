@@ -1197,6 +1197,17 @@ class NNTPClient(BaseNNTPClient):
 
         return article, msgid
 
+    def _parse_headers(self, lines: Iterator[bytes]) -> HeaderDict:
+        """Parse the headers of an ARTICLE or HEAD reply.
+
+        Raises:
+            NNTPDataError: If the headers can't be parsed.
+        """
+        try:
+            return utils.parse_headers(self._decode(lines))
+        except ValueError as e:
+            raise NNTPDataError(f"Invalid article headers: {e}") from e
+
     def _body(self, lines: Iterator[bytes], decode: bool | None = None) -> bytes:
         """Read an article body; decode it if it is yEnc.
 
@@ -1284,7 +1295,7 @@ class NNTPClient(BaseNNTPClient):
         # headers and body come from one reply, so read both from one iterator
         lines = self._info(code, message)
         try:
-            headers = utils.parse_headers(self._decode(lines))
+            headers = self._parse_headers(lines)
 
             if decode is None and "yEnc" in headers.get("subject", ""):
                 decode = True
@@ -1324,7 +1335,7 @@ class NNTPClient(BaseNNTPClient):
 
         lines = self._info(code, message)
         try:
-            return utils.parse_headers(self._decode(lines))
+            return self._parse_headers(lines)
         finally:
             lines.close()
 

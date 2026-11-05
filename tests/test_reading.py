@@ -261,8 +261,18 @@ def test_article_bad_headers(scripted_server: Start) -> None:
     reply = b"220 1 <a@b> article\r\n continuation first\r\n\r\nbody\r\n.\r\n"
     server = scripted_server({"ARTICLE": reply, "DATE": DATE})
     client = server.client()
-    with pytest.raises(ValueError, match="continuation"):
+    with pytest.raises(nntp.NNTPDataError, match="continuation"):
         client.article("<a@b>")
+    assert client.date() == DATE_VALUE
+
+
+def test_head_bad_headers(scripted_server: Start) -> None:
+    """Header parse errors are NNTPDataError (REVIEW.md Low list)."""
+    reply = b"221 1 <a@b> head\r\nno colon here\r\n.\r\n"
+    server = scripted_server({"HEAD": reply, "DATE": DATE})
+    client = server.client()
+    with pytest.raises(nntp.NNTPDataError, match="Invalid article headers"):
+        client.head("<a@b>")
     assert client.date() == DATE_VALUE
 
 
@@ -515,6 +525,7 @@ def test_yenc_short_crc_and_text_after_trailer(scripted_server: Start) -> None:
         (b"=yend size=ab crc32=0", "valid size"),
         (b"=yend size=%(size)d crc32=0garbage", "invalid CRC"),
         (b"=yend size=%(size)d crc32=123456789", "invalid CRC"),
+        (b"=yend size=%(size)d part=x pcrc32=%(crc)08x", "invalid part"),
     ],
 )
 def test_yenc_malformed_trailer(scripted_server: Start, end: bytes, match: str) -> None:
