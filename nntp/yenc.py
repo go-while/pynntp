@@ -51,6 +51,28 @@ def is_keyword_line(line: bytes, keyword: bytes) -> bool:
     )
 
 
+def _trailer_fields(trailer: bytes) -> dict[str, str]:
+    """Split a yEnc keyword line into its key=value fields."""
+    fields: dict[str, str] = {}
+    for token in trailer.split()[1:]:
+        key, sep, value = token.partition(b"=")
+        if sep:
+            fields[key.decode("ascii", "replace")] = value.decode("ascii", "replace")
+    return fields
+
+
+def _trailer_syntax_error(fields: dict[str, str], trailer: bytes) -> str | None:
+    """Describe a malformed size, part or CRC field, if any."""
+    if "size" not in fields or not _size_re.fullmatch(fields["size"]):
+        return f"yEnc trailer without a valid size: {trailer!r}"
+    if "part" in fields and not _size_re.fullmatch(fields["part"]):
+        return f"yEnc trailer with an invalid part number: {trailer!r}"
+    for key in ("pcrc32", "crc32"):
+        if key in fields and not _hex_crc_re.fullmatch(fields[key]):
+            return f"yEnc trailer with an invalid CRC: {trailer!r}"
+    return None
+
+
 def check_trailer(trailer: bytes, size: int, crc32: int) -> str | None:
     """Check decoded data against a yEnc ``=yend`` trailer line.
 
@@ -61,26 +83,17 @@ def check_trailer(trailer: bytes, size: int, crc32: int) -> str | None:
     Returns:
         None if the data matches, else a description of the problem.
     """
-    fields: dict[str, str] = {}
-    for token in trailer.split()[1:]:
-        key, sep, value = token.partition(b"=")
-        if sep:
-            fields[key.decode("ascii", "replace")] = value.decode("ascii", "replace")
-
-    expected_size = fields.get("size")
-    if expected_size is None or not _size_re.fullmatch(expected_size):
-        return f"yEnc trailer without a valid size: {trailer!r}"
-    if int(expected_size) != size:
-        return f"yEnc size mismatch: trailer {expected_size}, decoded {size}"
+    fields = _trailer_fields(trailer)
+    error = _trailer_syntax_error(fields, trailer)
+    if error:
+        return error
+    if int(fields["size"]) != size:
+        return f"yEnc size mismatch: trailer {fields['size']}, decoded {size}"
 
     expected = fields.get("pcrc32")
     if expected is None and "part" not in fields:
         expected = fields.get("crc32")
-    if expected is None:
-        return None
-    if not _hex_crc_re.fullmatch(expected):
-        return f"yEnc trailer with an invalid CRC: {trailer!r}"
-    if int(expected, 16) != crc32 & 0xFFFFFFFF:
+    if expected is not None and int(expected, 16) != crc32 & 0xFFFFFFFF:
         return f"yEnc CRC mismatch: trailer {expected}, decoded {crc32:08x}"
     return None
 
