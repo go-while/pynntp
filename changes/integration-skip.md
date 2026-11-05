@@ -1,1 +1,1 @@
-Changed: without an NNTP server on localhost:119 the integration tests are skipped instead of failing, so the test suite from the sdist runs anywhere; PYNNTP_INTEGRATION=1 makes the server required (set in CI) (#56).
+Changed: the integration tests, which post articles to the NNTP server on localhost, run only when PYNNTP_INTEGRATION=1 is set (CI sets it); otherwise they are skipped, so the test suite from the sdist runs anywhere without touching a news server (#56).
