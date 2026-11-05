@@ -1,0 +1,1 @@
+Fixed: NEWGROUPS and NEWNEWS now send the required literal `GMT` token instead of `UTC`, avoiding syntax errors from INN. Naive timestamps remain interpreted as UTC, and timezone-aware timestamps are converted to UTC.
