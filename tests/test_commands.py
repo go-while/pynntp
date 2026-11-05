@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import binascii
+import gzip
 import zlib
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
@@ -689,4 +690,99 @@ def test_new_command_negative_response_is_reusable(
     with pytest.raises(nntp.NNTPTemporaryError) as error:
         run_command()
     assert error.value.code == code
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
+    ("method", "command", "args"),
+    [
+        ("date", "DATE", ()),
+        ("help", "HELP", ()),
+        ("newgroups", "NEWGROUPS", (datetime(2026, 1, 1, tzinfo=timezone.utc),)),
+        ("newnews", "NEWNEWS", ("local.*", datetime(2026, 1, 1, tzinfo=timezone.utc))),
+        ("list", "LIST", ()),
+        ("list_active", "LIST ACTIVE", ()),
+        ("list_active_times", "LIST ACTIVE.TIMES", ()),
+        ("list_headers", "LIST HEADERS", ()),
+        ("list_newsgroups", "LIST NEWSGROUPS", ()),
+        ("list_overview_fmt", "LIST OVERVIEW.FMT", ()),
+        ("list_extensions", "LIST EXTENSIONS", ()),
+        ("group", "GROUP", ("local.test",)),
+        ("next", "NEXT", ()),
+        ("last", "LAST", ()),
+        ("hdr", "HDR", ("Subject", 1)),
+        ("xhdr", "XHDR", ("Subject", 1)),
+        ("xzhdr", "XZHDR", ("Subject", 1)),
+        ("xpat", "XPAT", ("Subject", 1, "*")),
+        ("xover", "XOVER", (1,)),
+        ("xzver", "XZVER", (1,)),
+        ("xfeature_compress_gzip", "XFEATURE COMPRESS GZIP", ()),
+        ("post", "POST", ()),
+        ("post_final", "POST", ()),
+    ],
+)
+def test_command_unexpected_multiline_success_is_drained(
+    scripted_server: Start, method: str, command: str, args: tuple[object, ...]
+) -> None:
+    code = 101 if method == "help" else 100
+    wrong = f"{code} unexpected\r\nignored\r\n.\r\n".encode()
+    server = scripted_server(
+        {
+            command: ReadArticle(b"340 send article\r\n", wrong)
+            if method == "post_final"
+            else wrong,
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    if method == "date":
+        replies = iter([wrong, b"111 20260102030405\r\n"])
+        server.script["DATE"] = lambda _line: next(replies)
+    client = server.client()
+    if method in ("xover", "xzver"):
+        client.overview_fmt = ("Subject",)
+    eager = {
+        "date",
+        "help",
+        "group",
+        "next",
+        "last",
+        "xfeature_compress_gzip",
+        "post",
+        "post_final",
+    }
+
+    def run_command() -> None:
+        name = "post" if method == "post_final" else method
+        result = getattr(client, name)(*args)
+        if method not in eager:
+            list(result)
+
+    with pytest.raises(nntp.NNTPReplyError) as error:
+        run_command()
+    assert error.value.code == code
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+def test_unexpected_compressed_success_is_drained(scripted_server: Start) -> None:
+    server = scripted_server(
+        {
+            "HELP": b"215 [COMPRESS=GZIP]\r\n" + gzip.compress(b"ignored\r\n.\r\n"),
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client()
+    with pytest.raises(nntp.NNTPReplyError) as error:
+        client.help()
+    assert error.value.code == 215
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+def test_unexpected_singleline_success_does_not_drain(scripted_server: Start) -> None:
+    server = scripted_server(
+        {"HELP": b"200 unexpected\r\n", "DATE": b"111 20260102030405\r\n"}
+    )
+    client = server.client()
+    with pytest.raises(nntp.NNTPReplyError) as error:
+        client.help()
+    assert error.value.code == 200
     assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)

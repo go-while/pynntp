@@ -1,0 +1,1 @@
+Fixed: Command methods consistently drain known multi-line replies before raising `NNTPReplyError` for an unexpected success code, including HELP, NEWGROUPS, NEWNEWS, LIST variants, overview commands and either POST status. The next command no longer consumes stale reply data. Single-line unexpected replies are not drained.
