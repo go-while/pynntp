@@ -38,8 +38,9 @@ with nntp.NNTPClient("news.example.com", 563, "user", "password", use_ssl=True) 
     total, first, last, group = client.group("comp.lang.python")
 
     # replies are generators: lines are processed as they arrive
-    for number, overview in client.xover((last - 100, last)):
-        print(number, overview["Subject"])
+    if total:
+        for number, overview in client.xover((max(first, last - 100), last)):
+            print(number, overview["Subject"])
 
     message_id = client.post(
         {
