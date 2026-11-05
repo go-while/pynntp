@@ -1,0 +1,2 @@
+Added: `ihave(message_id, headers=None, body=b"")` transfers an already-posted article after a `335` response and returns `True` only on final `235`. The existing 4xx exception hierarchy handles `435` (not wanted), `436` (retry later) and `437` (rejected).
+Changed: POST and IHAVE share the same bounded-memory, whole-article preflight, CRLF normalization, dot-stuffing and header validation. Invalid input or failing body iterators send no article command; POST's Message-ID return behavior is unchanged.
