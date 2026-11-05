@@ -1,0 +1,1 @@
+Changed: without an NNTP server on localhost:119 the integration tests are skipped instead of failing, so the test suite from the sdist runs anywhere; PYNNTP_INTEGRATION=1 makes the server required (set in CI) (#56).
