@@ -650,13 +650,13 @@ class BaseNNTPClient:
         try:
             return self._command_once(verb, args)
         except NNTPTemporaryError as e:
-            command = verb.strip().upper()
+            command = f"{verb} {args or ''}".upper().split()
             if (
                 e.code != 480
                 or self._tls_pending
                 or not self.username
-                or command == "MODE READER"
-                or command.split(maxsplit=1)[0:1] == ["AUTHINFO"]
+                or command[:2] == ["MODE", "READER"]
+                or command[:1] == ["AUTHINFO"]
             ):
                 raise
             self.login()
