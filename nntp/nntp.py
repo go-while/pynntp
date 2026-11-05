@@ -636,13 +636,14 @@ class BaseNNTPClient:
         Returns:
             A tuple of status code (as an integer) and status message.
 
+        Raises:
+            ValueError: If the verb or arguments contain CR, LF or NUL.
+
         Note:
             You can run raw commands by supplying the full command (including
             args) in the verb.
 
-        Note: Although it is possible you shouldn't issue more than one command
-            at a time by adding newlines to the verb as it will most likely
-            lead to undesirable results.
+        CR, LF and NUL are rejected in both the verb and arguments.
         """
         if self._generating:
             raise NNTPSyncError("Command issued while a generator is active")
@@ -664,9 +665,17 @@ class BaseNNTPClient:
 
     def _command_once(self, verb: str, args: str | None = None) -> tuple[int, str]:
         """Send one command without automatic authentication or retries."""
+        self._validate_command(verb, args)
         cmd = f"{verb} {args}\r\n" if args else f"{verb}\r\n"
         self.socket.sendall(cmd.encode(self.encoding))
         return self.status()
+
+    @staticmethod
+    def _validate_command(verb: str, args: str | None = None) -> None:
+        if any(char in value for value in (verb, args or "") for char in "\r\n\0"):
+            raise ValueError(
+                "Command verb and arguments must not contain CR, LF or NUL"
+            )
 
     def login(self, username: str | None = None, password: str | None = None) -> None:
         """Authenticate using AUTHINFO USER/PASS, defaulting to stored credentials.
@@ -682,6 +691,9 @@ class BaseNNTPClient:
         password = self.password if password is None else password
         if not username:
             raise NNTPError("A username is required for authentication")
+        # Validate both fields before sending AUTHINFO USER.
+        self._validate_command("AUTHINFO USER", username)
+        self._validate_command("AUTHINFO PASS", password)
         code, message = self._command_once("AUTHINFO USER", username)
         if code == 381:
             code, message = self._command_once("AUTHINFO PASS", password)
