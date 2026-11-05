@@ -52,6 +52,10 @@ def test_newgroups_water_marks(scripted_server: Start) -> None:
     [
         (datetime(2026, 1, 2, 3, 4, 5), "20260102 030405 GMT"),  # noqa: DTZ001
         (
+            datetime(1, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
+            "00010102 030405 GMT",
+        ),
+        (
             datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
             "20260102 030405 GMT",
         ),

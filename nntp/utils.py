@@ -199,7 +199,10 @@ def unparse_timestamp(timestamp: datetime) -> str:
         timestamp = timestamp.replace(tzinfo=timezone.utc)
     else:
         timestamp = timestamp.astimezone(timezone.utc)
-    return timestamp.strftime("%Y%m%d %H%M%S GMT")
+    return (
+        f"{timestamp.year:04d}{timestamp.month:02d}{timestamp.day:02d} "
+        f"{timestamp.hour:02d}{timestamp.minute:02d}{timestamp.second:02d} GMT"
+    )
 
 
 def parse_date(value: str | int) -> datetime:
