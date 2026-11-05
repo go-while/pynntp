@@ -60,6 +60,7 @@ read, so the next command raises `NNTPSyncError` until you finish it, call its
 `close()` or drop it:
 
 ```python
+# inside the with block above
 groups = client.list_active()
 first_group = next(groups)
 groups.close()  # or: del groups; or read it to the end
@@ -90,11 +91,14 @@ NNTP commands that are currently supported include:
 - GROUP
 - NEXT
 - LAST
+- STAT
+- LISTGROUP
 - ARTICLE
 - HEAD
 - BODY (yEnc bodies are decoded and checked against their size and CRC)
 - POST
 - HDR
+- OVER
 - XHDR
 - XZHDR
 - XOVER
