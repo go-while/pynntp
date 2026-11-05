@@ -6,21 +6,29 @@ import pytest
 import nntp
 from nntp.types import SSLMode
 
+# Only the names are compared: the descriptions are data of the server and
+# differ between INN setups (INN's default ones end with a period, those of the
+# greenbender/inn image do not).
 DEFAULT_NEWGROUPS = {
-    ("control", "Various control messages (no posting)"),
-    ("control.cancel", "Cancel messages (no posting)"),
-    ("control.checkgroups", "Hierarchy check control messages (no posting)"),
-    ("control.newgroup", "Newsgroup creation control messages (no posting)"),
-    ("control.rmgroup", "Newsgroup removal control messages (no posting)"),
-    ("junk", "Unfiled articles (no posting)"),
-    ("local.general", "Local general group"),
-    ("local.test", "Local test group"),
+    "control",
+    "control.cancel",
+    "control.checkgroups",
+    "control.newgroup",
+    "control.rmgroup",
+    "junk",
+    "local.general",
+    "local.test",
 }
+
+
+def newsgroup_names(nntp_client: nntp.NNTPClient) -> set[str]:
+    """Return the names of the newsgroups LIST NEWSGROUPS returns."""
+    return {name for name, _description in nntp_client.list_newsgroups()}
 
 
 def test_nntp_client() -> None:
     nntp_client = nntp.NNTPClient("localhost")
-    newsgroups = set(nntp_client.list_newsgroups())
+    newsgroups = newsgroup_names(nntp_client)
     assert newsgroups == DEFAULT_NEWGROUPS
 
 
@@ -29,7 +37,7 @@ def test_context_manager() -> None:
     https://docs.python.org/3/reference/datamodel.html#context-managers
     """
     with nntp.NNTPClient("localhost") as nntp_client:
-        newsgroups = set(nntp_client.list_newsgroups())
+        newsgroups = newsgroup_names(nntp_client)
         assert newsgroups == DEFAULT_NEWGROUPS
 
 
@@ -39,7 +47,7 @@ def test_context_manager_on_close() -> None:
     nntp_client.close() should normally not be called within the context manager.
     """
     with nntp.NNTPClient("localhost") as nntp_client:
-        newsgroups = set(nntp_client.list_newsgroups())
+        newsgroups = newsgroup_names(nntp_client)
         assert newsgroups == DEFAULT_NEWGROUPS
         nntp_client.close()
 
@@ -50,21 +58,21 @@ def test_context_manager_on_quit() -> None:
     nntp_client.quit() should normally not be called within the context manager.
     """
     with nntp.NNTPClient("localhost") as nntp_client:
-        newsgroups = set(nntp_client.list_newsgroups())
+        newsgroups = newsgroup_names(nntp_client)
         assert newsgroups == DEFAULT_NEWGROUPS
         nntp_client.quit()
 
 
 def test_nntp_client_without_ssl() -> None:
     with nntp.NNTPClient("localhost", use_ssl=False) as nntp_client:
-        newsgroups = set(nntp_client.list_newsgroups())
+        newsgroups = newsgroup_names(nntp_client)
         assert newsgroups == DEFAULT_NEWGROUPS
 
 
 @mock.patch.dict(os.environ, {"PYNNTP_TLS_INSECURE": "1"})
 def test_nntp_client_with_ssl() -> None:
     with nntp.NNTPClient("localhost", 563, use_ssl=True) as nntp_client:
-        newsgroups = set(nntp_client.list_newsgroups())
+        newsgroups = newsgroup_names(nntp_client)
         assert newsgroups == DEFAULT_NEWGROUPS
 
 
@@ -73,7 +81,7 @@ def test_nntp_client_with_ssl_starttls() -> None:
     with nntp.NNTPClient(
         "localhost", use_ssl=True, ssl_mode=SSLMode.STARTTLS
     ) as nntp_client:
-        newsgroups = set(nntp_client.list_newsgroups())
+        newsgroups = newsgroup_names(nntp_client)
         assert newsgroups == DEFAULT_NEWGROUPS
 
 
