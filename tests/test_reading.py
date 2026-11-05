@@ -4,8 +4,13 @@ from __future__ import annotations
 
 import binascii
 import gzip
+import zlib
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
+
+import pytest
+
+import nntp
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -152,3 +157,197 @@ def test_yenc_body_with_dot_lines(scripted_server: Start) -> None:
     server = scripted_server({"BODY": b"222 0 <a@b> body\r\n" + wire + b".\r\n"})
     client = server.client()
     assert client.body("<a@b>") == data
+
+
+# Abandoned and failed replies (bug 5): the connection must stay usable.
+
+ACTIVE = b"215 list follows\r\na.one 2 1 y\r\na.two 2 1 y\r\na.three 2 1 y\r\n.\r\n"
+
+
+def test_break_out_of_reply(scripted_server: Start) -> None:
+    server = scripted_server({"LIST ACTIVE": ACTIVE, "DATE": DATE})
+    client = server.client()
+    for _group in client.list_active():
+        break
+    assert client.date() == DATE_VALUE
+
+
+def test_next_once(scripted_server: Start) -> None:
+    server = scripted_server(
+        {"CAPABILITIES": b"101 caps\r\nVERSION 2\r\nREADER\r\n.\r\n", "DATE": DATE}
+    )
+    client = server.client()
+    assert next(client.capabilities()) == "VERSION 2"
+    assert client.date() == DATE_VALUE
+
+
+def test_parse_error_inside_reply(scripted_server: Start) -> None:
+    server = scripted_server(
+        {
+            "LIST ACTIVE.TIMES": b"215 times\r\nbad\r\nmore 1 x\r\n.\r\n",
+            "DATE": DATE,
+        }
+    )
+    client = server.client()
+    with pytest.raises(nntp.NNTPDataError):
+        list(client.list_active_times())
+    assert client.date() == DATE_VALUE
+
+
+def test_caller_error_inside_loop(scripted_server: Start) -> None:
+    server = scripted_server({"LIST ACTIVE": ACTIVE, "DATE": DATE})
+    client = server.client()
+    with pytest.raises(KeyError):
+        _fail_in_loop(client)
+    assert client.date() == DATE_VALUE
+
+
+def _fail_in_loop(client: nntp.NNTPClient) -> None:
+    for _group in client.list_active():
+        raise KeyError
+
+
+def test_reply_still_held_is_active(scripted_server: Start) -> None:
+    """A reply someone still reads blocks other commands, as before."""
+    server = scripted_server({"LIST ACTIVE": ACTIVE, "DATE": DATE})
+    client = server.client()
+    groups = client.list_active()
+    assert next(groups).name == "a.one"
+    with pytest.raises(nntp.nntp.NNTPSyncError):  # exported by B6
+        client.date()
+    assert [group.name for group in groups] == ["a.two", "a.three"]
+    assert client.date() == DATE_VALUE
+
+
+def test_with_block_break(scripted_server: Start) -> None:
+    server = scripted_server({"LIST ACTIVE": ACTIVE})
+    with server.client() as client:
+        for _group in client.list_active():
+            break
+    assert server.received[-1] == "QUIT"
+
+
+def test_with_block_user_error_propagates(scripted_server: Start) -> None:
+    server = scripted_server({"LIST ACTIVE": ACTIVE})
+    with pytest.raises(KeyError):
+        _fail_in_with_block(server)
+    assert server.received[-1] == "QUIT"
+
+
+def _fail_in_with_block(server: ScriptedServer) -> None:
+    with server.client() as client:
+        _fail_in_loop(client)
+
+
+ARTICLE = (
+    b"220 1 <a@b> article\r\n"
+    b"Subject: hello\r\nFrom: x <x@y>\r\n\r\n"
+    b"body line\r\n..dot\r\n.\r\n"
+)
+
+
+def test_article_headers_and_body(scripted_server: Start) -> None:
+    server = scripted_server({"ARTICLE": ARTICLE, "DATE": DATE})
+    client = server.client()
+    number, headers, body = client.article("<a@b>", decode=False)
+    assert number == 1
+    assert headers["Subject"] == "hello"
+    assert body == b"body line\r\n.dot\r\n"
+    assert client.date() == DATE_VALUE
+
+
+def test_article_bad_headers(scripted_server: Start) -> None:
+    """A header parse error must not leave the body on the connection."""
+    reply = b"220 1 <a@b> article\r\n continuation first\r\n\r\nbody\r\n.\r\n"
+    server = scripted_server({"ARTICLE": reply, "DATE": DATE})
+    client = server.client()
+    with pytest.raises(ValueError, match="continuation"):
+        client.article("<a@b>")
+    assert client.date() == DATE_VALUE
+
+
+def test_head(scripted_server: Start) -> None:
+    reply = b"221 1 <a@b> head\r\nSubject: hello\r\n.\r\n"
+    server = scripted_server({"HEAD": reply, "DATE": DATE})
+    client = server.client()
+    assert client.head("<a@b>")["Subject"] == "hello"
+    assert client.date() == DATE_VALUE
+
+
+def test_gzip_abandoned(scripted_server: Start) -> None:
+    blob = gzip.compress(STUFFED + b".\r\n")
+    reply = [_gzip_list(blob[:-8]), 0.05, blob[-8:]]
+    server = scripted_server({"LIST": reply, "DATE": DATE})
+    client = server.client()
+    assert next(client.list()) == "plain\r\n"
+    assert client.date() == DATE_VALUE
+
+
+def _xzver_reply(text: bytes, *, crc: int | None = None) -> bytes:
+    deflate = zlib.compressobj(9, zlib.DEFLATED, -15)
+    data = deflate.compress(text) + deflate.flush()
+    lines = _yenc_lines(data)
+    crc = binascii.crc32(data) if crc is None else crc
+    wire = [
+        b"=ybegin line=128 size=%d name=xzver" % len(data),
+        *lines,
+        b"=yend size=%d crc32=%08x" % (len(data), crc),
+    ]
+    stuffed = b"".join((b"." + x if x.startswith(b".") else x) + b"\r\n" for x in wire)
+    return b"224 compressed overview\r\n" + stuffed + b".\r\n"
+
+
+OVERVIEW = (
+    b"1\tsubject one\tx@y\tdate\t<1@y>\t\t10\t1\r\n"
+    b"2\tsubject two\tx@y\tdate\t<2@y>\t\t10\t1\r\n"
+)
+OVERVIEW_FMT = (
+    b"215 fmt\r\nSubject:\r\nFrom:\r\nDate:\r\nMessage-ID:\r\n"
+    b"References:\r\nBytes:\r\nLines:\r\n.\r\n"
+)
+
+
+def test_xzver(scripted_server: Start) -> None:
+    server = scripted_server(
+        {
+            "LIST OVERVIEW.FMT": OVERVIEW_FMT,
+            "XZVER": _xzver_reply(OVERVIEW),
+            "DATE": DATE,
+        }
+    )
+    client = server.client()
+    entries = list(client.xzver((1, 2)))
+    assert [(n, h["Subject"]) for n, h in entries] == [
+        (1, "subject one"),
+        (2, "subject two"),
+    ]
+    assert client.date() == DATE_VALUE
+
+
+def test_xzver_abandoned_and_bad_crc(scripted_server: Start) -> None:
+    server = scripted_server(
+        {
+            "LIST OVERVIEW.FMT": OVERVIEW_FMT,
+            "XZVER 1-2": _xzver_reply(OVERVIEW),
+            "XZVER 1-": _xzver_reply(OVERVIEW, crc=0),
+            "DATE": DATE,
+        }
+    )
+    client = server.client()
+    assert next(client.xzver((1, 2)))[0] == 1
+    assert client.date() == DATE_VALUE
+    with pytest.raises(nntp.NNTPDataError, match="CRC"):
+        list(client.xzver((1,)))
+    assert client.date() == DATE_VALUE
+
+
+def test_unexpected_multiline_code_is_drained(scripted_server: Start) -> None:
+    server = scripted_server({"HDR": b"221 old-style\r\n1 subj\r\n.\r\n", "DATE": DATE})
+    client = server.client()
+    # as if a command got a multi-line success code it didn't expect
+    client.socket.sendall(b"HDR Subject\r\n")
+    code, message = client.status()
+    error = client._unexpected(code, message)  # noqa: SLF001
+    assert isinstance(error, nntp.NNTPReplyError)
+    assert error.code == 221
+    assert client.date() == DATE_VALUE
