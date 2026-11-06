@@ -32,7 +32,9 @@ documentation, including examples, is on the TODO list.
 import nntp
 
 # implicit TLS on port 563; use SSLMode.STARTTLS on port 119 instead
-with nntp.NNTPClient("news.example.com", 563, "user", "password", use_ssl=True) as client:
+with nntp.NNTPClient(
+    "news.example.com", 563, "user", "password", use_ssl=True
+) as client:
     print(client.date())  # datetime in UTC, e.g. 2026-11-05 21:58:07+00:00
 
     total, first, last, group = client.group("comp.lang.python")

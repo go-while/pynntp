@@ -60,6 +60,8 @@ testpaths = ["tests"]
 
 [tool.ruff]
 target-version = "py310"
+# review/probes/ are the October 2026 review's evidence scripts, kept as written
+extend-exclude = ["review"]
 
 [tool.ruff.lint]
 select = [
