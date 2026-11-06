@@ -12,6 +12,9 @@ import nntp
 @pytest.mark.parametrize("verb", ["POST", "IHAVE"])
 def test_compressed_article_round_trip(verb: str) -> None:
     with nntp.NNTPClient("localhost", reader=False) as client:
+        capabilities = list(client.capabilities())
+        if any(line.startswith("IMPLEMENTATION INN 2.6.") for line in capabilities):
+            pytest.skip("nnrpd 2.6 stalls on compressed article input")
         # B9 adds public compress(); C13 exercises the already-agreed I6
         # boundary directly without requiring the session-feature branch.
         assert client.command("COMPRESS DEFLATE")[0] == 206
