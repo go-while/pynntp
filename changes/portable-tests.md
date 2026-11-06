@@ -1,0 +1,1 @@
+Changed: The integration tests also run against other servers than INN (tested with Diablo and NewsCache): tests of optional features skip when CAPABILITIES does not list them, POST may answer without a Message-ID, tests wait until a posted article is listed in its group, and `PYNNTP_TLS_CAFILE` and `PYNNTP_POST_WAIT` configure the certificate and the wait.

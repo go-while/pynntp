@@ -126,5 +126,23 @@ sudo sh tests/integration/inn2/setup.sh   # Debian/Ubuntu: installs and configur
 PYNNTP_INTEGRATION=1 pytest
 ```
 
+They also run against other servers on localhost:119 (plain and STARTTLS) and
+563 (implicit TLS); like with INN, use a disposable server, as they post
+articles. A test that needs an optional feature (COMPRESS, STARTTLS, IHAVE,
+NEWNEWS, HDR, OVER) is skipped when the server does not list it in
+CAPABILITIES, and tests of INN's own setup are skipped on other servers. The
+server needs the groups `local.general` and `local.test`, open for reading and
+posting.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `PYNNTP_TLS_CAFILE` | `/etc/news/pynntp-cert.pem` | certificate of the server's TLS listener |
+| `PYNNTP_POST_WAIT` | `10` | seconds to wait until a posted article is readable and listed in its group |
+
+Tested on 2026-11-06, with no failures, against INN 2.6.4, 2.7.4 and 2.8.0
+(prerelease), Diablo (jrehmer/diablo-nntp 976bc30) and NewsCache (e1baa94, with
+`GroupTimeout 2` and `Timeouts 2 2`, so that its cache shows new articles
+quickly).
+
 Each change adds a one-line changelog fragment in `changes/` (see
 `changes/README.md`).
