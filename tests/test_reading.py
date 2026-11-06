@@ -693,3 +693,39 @@ def test_compress_twice_refused(scripted_server: Start) -> None:
     _start(client)
     with pytest.raises(nntp.NNTPError, match="already active"):
         client._start_compression()  # noqa: SLF001
+
+
+def _finished(data: bytes) -> bytes:
+    deflate = zlib.compressobj(9, zlib.DEFLATED, -15)
+    return deflate.compress(data) + deflate.flush(zlib.Z_FINISH)
+
+
+def test_compress_data_after_stream_end_closes(scripted_server: Start) -> None:
+    """Bytes after the end of the DEFLATE stream are corrupt (review: terra)."""
+    server = scripted_server(
+        {
+            "COMPRESS DEFLATE": StartCompression(),
+            "DATE": [Raw(_finished(DATE) + b"garbage")],
+        }
+    )
+    client = server.client()
+    _start(client)
+    with pytest.raises(nntp.NNTPDataError, match="COMPRESS stream corrupt"):
+        client.date()
+    assert client.socket.fileno() == -1
+
+
+def test_compress_tail_after_stream_end_closes(scripted_server: Start) -> None:
+    server = scripted_server(
+        {
+            "COMPRESS DEFLATE": [
+                Raw(b"206 compression active\r\n" + _finished(DATE) + b"garbage")
+            ]
+        }
+    )
+    client = server.client()
+    code, _message = client.command("COMPRESS DEFLATE")
+    assert code == 206
+    with pytest.raises(nntp.NNTPDataError, match="COMPRESS stream corrupt"):
+        client._start_compression()  # noqa: SLF001
+    assert client.socket.fileno() == -1

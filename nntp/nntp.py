@@ -313,14 +313,33 @@ class BaseNNTPClient:
         if not data:
             raise NNTPError("Failed to read from socket")
         if self._inflater is not None:
-            try:
-                data = self._inflater.decompress(data)
-            except zlib.error:
-                # nothing on this connection can be read reliably any more
-                with contextlib.suppress(OSError):
-                    self.socket.close()
-                raise NNTPDataError("COMPRESS stream corrupt, connection closed")
+            data = self._inflate_stream(data)
         self._buffer.write(data)
+
+    def _inflate_stream(self, data: bytes) -> bytes:
+        """Inflate data read from a COMPRESS connection.
+
+        Corrupt data, or data after the end of the DEFLATE stream (the stream
+        lasts as long as the connection), closes the connection: nothing on it
+        can be read reliably any more.
+
+        Raises:
+            NNTPDataError: If the compressed stream is corrupt.
+        """
+        if self._inflater is None:
+            return data
+        try:
+            data = self._inflater.decompress(data)
+        except zlib.error:
+            data = b""
+            corrupt = True
+        else:
+            corrupt = bool(self._inflater.unused_data)
+        if corrupt:
+            with contextlib.suppress(OSError):
+                self.socket.close()
+            raise NNTPDataError("COMPRESS stream corrupt, connection closed")
+        return data
 
     def _sendall(self, data: bytes) -> None:
         """Send data to the server, compressed while COMPRESS is active.
@@ -353,12 +372,7 @@ class BaseNNTPClient:
         # Anything read past the 206 line already is compressed.
         pending = self._buffer.read()
         if pending:
-            try:
-                self._buffer.write(self._inflater.decompress(pending))
-            except zlib.error:
-                with contextlib.suppress(OSError):
-                    self.socket.close()
-                raise NNTPDataError("COMPRESS stream corrupt, connection closed")
+            self._buffer.write(self._inflate_stream(pending))
 
     @property
     def compressed(self) -> bool:
