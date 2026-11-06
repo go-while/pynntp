@@ -6,13 +6,16 @@ import pytest
 
 import nntp
 from nntp.types import SSLMode
+from tests.integration.portable import TLS_CAFILE, require
 
 
 @pytest.mark.parametrize("mode", [SSLMode.IMPLICIT, SSLMode.STARTTLS])
 def test_custom_tls_context(mode: SSLMode, monkeypatch: pytest.MonkeyPatch) -> None:
     # The test server's self-signed certificate is trusted explicitly. The
     # context must not be weakened by the insecure environment setting.
-    context = ssl.create_default_context(cafile="/etc/news/pynntp-cert.pem")
+    if mode == SSLMode.STARTTLS:
+        require("STARTTLS")
+    context = ssl.create_default_context(cafile=TLS_CAFILE)
     monkeypatch.setenv("PYNNTP_TLS_INSECURE", "1")
     port = 563 if mode == SSLMode.IMPLICIT else 119
     with nntp.NNTPClient(
