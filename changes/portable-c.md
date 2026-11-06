@@ -1,1 +1,0 @@
-Changed: C-command integration tests gate optional features on advertised capabilities, accept successful POST replies without a Message-ID, and wait for article and group visibility through the shared portable helpers. XHDR by Message-ID remains asserted on Diablo rather than skipped; the documented INN 2.6 compressed-upload exception is retained.
