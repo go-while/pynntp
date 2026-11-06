@@ -478,6 +478,69 @@ def test_authinfo_challenge_does_not_recurse(scripted_server: Start) -> None:
     assert server.received == ["MODE READER", "AUTHINFO USER user"]
 
 
+@pytest.mark.parametrize(
+    ("verb", "args"),
+    [("STARTTLS", None), ("starttls", ""), ("  StArTtLs  ", None), ("", "STARTTLS")],
+)
+def test_raw_starttls_challenge_never_authenticates(
+    scripted_server: Start, verb: str, args: str | None
+) -> None:
+    command = f"{verb} {args}" if args else verb
+    server = scripted_server(
+        {
+            command: b"480 authentication required\r\n",
+            "AUTHINFO USER user": b"381 password required\r\n",
+            "AUTHINFO PASS secret": b"281 accepted\r\n",
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client(reader=False, username="user", password="secret")  # noqa: S106
+    with pytest.raises(nntp.NNTPTemporaryError, match="480"):
+        client.command(verb, args)
+    assert client.date().year == 2026
+    assert server.received == [command, "DATE"]
+
+
+def test_command_roundtrips_surrogateescaped_bytes(scripted_server: Start) -> None:
+    group = b"local.\xff".decode("utf-8", "surrogateescape")
+    server = scripted_server({f"GROUP {group}": b"211 0 1 0 local.test\r\n"})
+    client = server.client()
+    assert client.command("GROUP", group)[0] == 211
+    assert server.received == ["MODE READER", f"GROUP {group}"]
+
+
+def test_command_encoding_respects_strict_errors(scripted_server: Start) -> None:
+    server = scripted_server({"DATE": b"111 20260102030405\r\n"})
+    client = server.client()
+    client.errors = "strict"
+    with pytest.raises(UnicodeEncodeError):
+        client.command("GROUP", "local.\udcff")
+    assert client.date().year == 2026
+    assert server.received == ["MODE READER", "DATE"]
+
+
+@pytest.mark.parametrize("stage", ["USER", "PASS", "MODE"])
+def test_session_unexpected_multiline_is_drained(
+    scripted_server: Start, stage: str
+) -> None:
+    reply = b"101 unexpected capability list\r\nVERSION 2\r\n.\r\n"
+    server = scripted_server(
+        {
+            "AUTHINFO USER user": reply
+            if stage == "USER"
+            else b"381 password required\r\n",
+            "AUTHINFO PASS secret": reply,
+            "MODE READER": reply,
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client(reader=False, username="user", password="secret")  # noqa: S106
+    action = client.mode_reader if stage == "MODE" else client.login
+    with pytest.raises(nntp.NNTPReplyError, match="101"):
+        action()
+    assert client.date().year == 2026
+
+
 def test_authinfo_pass_failure_does_not_retry(scripted_server: Start) -> None:
     server = scripted_server(
         {
