@@ -68,10 +68,12 @@ section before upgrading.
   are compressed once it is active; the `compressed` property tells whether it
   is. Afterwards the client refuses AUTHINFO, STARTTLS, MODE READER and another
   COMPRESS itself and does no automatic login, so credentials are never sent
-  compressed; with TLS-level compression active, COMPRESS, STARTTLS and MODE
-  READER are refused. A corrupt compressed stream, or data after its end,
-  closes the connection. Note: INN 2.6's nnrpd can stall on compressed POST or
-  IHAVE articles; INN 2.7 is fine.
+  through the COMPRESS layer. With TLS-level compression active, COMPRESS,
+  STARTTLS and MODE READER are refused, while AUTHINFO stays allowed as
+  RFC 8054 permits. A corrupt compressed stream, or data after its end,
+  closes the connection. Note: in our tests INN 2.6.4's nnrpd stalled on
+  compressed POST or IHAVE articles; compressed uploads worked with INN
+  2.7.2-2.7.4.
 - `login()`: explicit AUTHINFO USER/PASS with given or stored credentials.
 - `ssl_context` argument for both client classes.
 - `NNTPSyncError` and `NNTPTimeoutError` are exported.
@@ -117,7 +119,7 @@ section before upgrading.
 - CI on GitHub: ruff, ruff format, mypy --strict, and the tests on Python
   3.10-3.15 and free-threaded 3.14t against INN from Ubuntu's `inn2` package
   (`tests/integration/inn2/setup.sh`). The 3.14t/3.15 matrix, the pre-commit
-  hook updates and the quarterly pre-commit.ci schedule come from Christian
+  hook updates and the quarterly schedule of pre-commit.ci's hook-update PRs come from Christian
   Clauss's upstream PRs #100, #101 and #98.
 - Dependencies in `poetry.lock` refreshed; `pre-commit` is no longer a Poetry
   dev dependency.
