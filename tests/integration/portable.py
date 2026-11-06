@@ -64,23 +64,44 @@ def check_posted(result: str | bool, message_id: str) -> None:
 
 
 def wait_for_article(
-    client: nntp.NNTPClient, message_id: str, timeout: float = POST_WAIT
+    client: nntp.NNTPClient,
+    message_id: str,
+    group: str | None = None,
+    timeout: float = POST_WAIT,
 ) -> None:
-    """Wait until STAT finds message_id; raise the last error after timeout.
+    """Wait until message_id is readable, and listed in group if given.
 
     Some servers (Diablo) make a posted article readable through their feed,
-    a moment after the 240 reply.
+    a moment after the 240 reply, and STAT by Message-ID can succeed before
+    GROUP and the overview show it. With group, this also waits until XHDR
+    Message-ID over the group's last RECENT articles lists message_id; that
+    is selected afterwards. Raises the last error, or AssertionError, after
+    timeout.
     """
     deadline = time.monotonic() + timeout
     while True:
         try:
             client.stat(message_id)
-        except nntp.NNTPTemporaryError:  # noqa: PERF203 (polls a server)
-            if time.monotonic() >= deadline:
-                raise
-            time.sleep(0.2)
-        else:
-            return
+            if group is None or _in_group(client, message_id, group):
+                return
+            error: Exception = AssertionError(f"{message_id} not in {group}")
+        except nntp.NNTPTemporaryError as exc:
+            error = exc
+        if time.monotonic() >= deadline:
+            raise error
+        time.sleep(0.2)
+
+
+RECENT = 100
+
+
+def _in_group(client: nntp.NNTPClient, message_id: str, group: str) -> bool:
+    """Tell whether XHDR over the last RECENT articles of group lists message_id."""
+    _total, first, last, _name = client.group(group)
+    if last < first:
+        return False
+    found = client.xhdr("Message-ID", f"{max(first, last - RECENT + 1)}-{last}")
+    return message_id in {value.strip() for _number, value in found}
 
 
 def post_and_wait(
@@ -90,10 +111,14 @@ def post_and_wait(
 ) -> str:
     """Post an article that has a Message-ID header and wait until it is readable.
 
+    Also waits until it is listed in the first group of its Newsgroups header,
+    which is then selected.
+
     Returns:
         The Message-ID from the headers.
     """
     message_id = headers["Message-ID"]
     check_posted(client.post(headers, body), message_id)
-    wait_for_article(client, message_id)
+    group = headers.get("Newsgroups", "").split(",")[0].strip() or None
+    wait_for_article(client, message_id, group)
     return message_id
