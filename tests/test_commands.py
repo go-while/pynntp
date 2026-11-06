@@ -1286,3 +1286,36 @@ def test_article_preserves_typed_status_timeout_and_cause(
     assert error.value is original
     assert error.value.__cause__ is cause
     assert client.socket.fileno() == -1
+
+
+def test_list_newsgroups_can_omit_undescribed_active_group(
+    scripted_server: Start,
+) -> None:
+    """Issue #95 is server metadata, not a client cache or a missing group."""
+    server = scripted_server(
+        {
+            "LIST NEWSGROUPS local.*": (
+                b"215 descriptions\r\n"
+                b"local.described A group with a description.\r\n.\r\n"
+            ),
+            "LIST ACTIVE local.*": (
+                b"215 groups\r\nlocal.described 2 1 y\r\nlocal.new 0 1 y\r\n.\r\n"
+            ),
+        }
+    )
+    client = server.client()
+    assert list(client.list_newsgroups("local.*")) == [
+        ("local.described", "A group with a description.")
+    ]
+    assert {group.name for group in client.list_active("local.*")} == {
+        "local.described",
+        "local.new",
+    }
+    server.script["LIST NEWSGROUPS local.*"] = (
+        b"215 descriptions\r\nlocal.described A group with a description.\r\n"
+        b"local.new Newly added description.\r\n.\r\n"
+    )
+    assert list(client.list_newsgroups("local.*"))[-1] == (
+        "local.new",
+        "Newly added description.",
+    )

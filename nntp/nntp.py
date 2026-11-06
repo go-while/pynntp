@@ -1255,6 +1255,13 @@ class NNTPClient(BaseNNTPClient):
         Retrieves a list of newsgroups including the name and a short
         description.
 
+        This is not necessarily a complete list of available groups. RFC 3977
+        permits the server to omit groups without descriptions; INN uses its
+        newsgroups description file, so a newly created group may be absent
+        until its description is added there. This is server data, not a
+        client-side cache (upstream issue #95). Use list_active(pattern) to
+        discover available groups and their water marks instead.
+
         See <http://tools.ietf.org/html/rfc3977#section-7.6.6>
 
         Args:
