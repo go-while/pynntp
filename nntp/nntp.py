@@ -209,6 +209,10 @@ class BaseNNTPClient:
     encoding = "utf-8"
     errors = "surrogateescape"
 
+    # COMPRESS DEFLATE (RFC 8054) state; both set by _start_compression()
+    _inflater: zlib._Decompress | None = None
+    _deflater: zlib._Compress | None = None
+
     def __init__(
         self,
         host: str,
@@ -308,7 +312,72 @@ class BaseNNTPClient:
             raise NNTPTimeoutError("Reading from the server timed out") from exc
         if not data:
             raise NNTPError("Failed to read from socket")
+        if self._inflater is not None:
+            data = self._inflate_stream(data)
         self._buffer.write(data)
+
+    def _inflate_stream(self, data: bytes) -> bytes:
+        """Inflate data read from a COMPRESS connection.
+
+        Corrupt data, or data after the end of the DEFLATE stream (the stream
+        lasts as long as the connection), closes the connection: nothing on it
+        can be read reliably any more.
+
+        Raises:
+            NNTPDataError: If the compressed stream is corrupt.
+        """
+        if self._inflater is None:
+            return data
+        try:
+            data = self._inflater.decompress(data)
+        except zlib.error:
+            data = b""
+            corrupt = True
+        else:
+            corrupt = bool(self._inflater.unused_data)
+        if corrupt:
+            with contextlib.suppress(OSError):
+                self.socket.close()
+            raise NNTPDataError("COMPRESS stream corrupt, connection closed")
+        return data
+
+    def _sendall(self, data: bytes) -> None:
+        """Send data to the server, compressed while COMPRESS is active.
+
+        Every write to the socket goes through here (interface I5).
+        """
+        if self._deflater is not None:
+            data = self._deflater.compress(data) + self._deflater.flush(
+                zlib.Z_SYNC_FLUSH
+            )
+        self.socket.sendall(data)
+
+    def _start_compression(self) -> None:
+        """Switch the connection to raw DEFLATE in both directions (RFC 8054).
+
+        Call it right after the server's 206 reply to COMPRESS DEFLATE.
+        Compression starts right after the CRLF of that reply (RFC 8054
+        section 2.2.2), so bytes already read past it into the buffer are
+        compressed and are inflated here.
+
+        Raises:
+            NNTPError: If compression is already active.
+        """
+        if self._inflater is not None:
+            raise NNTPError("Compression is already active")
+        self._inflater = zlib.decompressobj(-15)
+        self._deflater = zlib.compressobj(
+            zlib.Z_DEFAULT_COMPRESSION, zlib.DEFLATED, -15
+        )
+        # Anything read past the 206 line already is compressed.
+        pending = self._buffer.read()
+        if pending:
+            self._buffer.write(self._inflate_stream(pending))
+
+    @property
+    def compressed(self) -> bool:
+        """True once COMPRESS DEFLATE is active on this connection."""
+        return self._inflater is not None
 
     def _line(self) -> Iterator[bytes]:
         """Generator that reads a line of data from the server.
@@ -719,7 +788,7 @@ class BaseNNTPClient:
             raise NNTPError("Connection is closed")
         cmd = f"{verb} {args}\r\n" if args else f"{verb}\r\n"
         try:
-            self.socket.sendall(cmd.encode(self.encoding))
+            self._sendall(cmd.encode(self.encoding))
         except TimeoutError as exc:
             # A partial command may have reached the server; don't reuse it.
             with contextlib.suppress(OSError):
