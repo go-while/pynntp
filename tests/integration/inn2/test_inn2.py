@@ -6,31 +6,34 @@ import pytest
 
 import nntp
 from nntp.types import SSLMode
+from tests.integration.portable import check_posted, post_and_wait, require, require_inn
 
-# Only the names are compared: the descriptions are data of the server and
-# differ between INN setups (INN's default ones end with a period, those of the
-# greenbender/inn image do not).
-DEFAULT_NEWGROUPS = {
+TEST_GROUPS = {"local.general", "local.test"}
+INN_DEFAULT_GROUPS = TEST_GROUPS | {
     "control",
     "control.cancel",
     "control.checkgroups",
     "control.newgroup",
     "control.rmgroup",
     "junk",
-    "local.general",
-    "local.test",
 }
 
 
 def newsgroup_names(nntp_client: nntp.NNTPClient) -> set[str]:
-    """Return the names of the newsgroups LIST NEWSGROUPS returns."""
-    return {name for name, _description in nntp_client.list_newsgroups()}
+    """Return active group names, independently of optional descriptions."""
+    return {group.name for group in nntp_client.list_active()}
+
+
+def test_inn_default_newsgroups() -> None:
+    require_inn()
+    with nntp.NNTPClient("localhost") as client:
+        assert {name for name, _ in client.list_newsgroups()} == INN_DEFAULT_GROUPS
 
 
 def test_nntp_client() -> None:
     nntp_client = nntp.NNTPClient("localhost")
     newsgroups = newsgroup_names(nntp_client)
-    assert newsgroups == DEFAULT_NEWGROUPS
+    assert newsgroups >= TEST_GROUPS
 
 
 def test_context_manager() -> None:
@@ -39,7 +42,7 @@ def test_context_manager() -> None:
     """
     with nntp.NNTPClient("localhost") as nntp_client:
         newsgroups = newsgroup_names(nntp_client)
-        assert newsgroups == DEFAULT_NEWGROUPS
+        assert newsgroups >= TEST_GROUPS
 
 
 def test_context_manager_on_close() -> None:
@@ -48,7 +51,7 @@ def test_context_manager_on_close() -> None:
     """
     with nntp.NNTPClient("localhost") as nntp_client:
         newsgroups = newsgroup_names(nntp_client)
-        assert newsgroups == DEFAULT_NEWGROUPS
+        assert newsgroups >= TEST_GROUPS
         nntp_client.close()
 
 
@@ -58,30 +61,31 @@ def test_context_manager_on_quit() -> None:
     """
     with nntp.NNTPClient("localhost") as nntp_client:
         newsgroups = newsgroup_names(nntp_client)
-        assert newsgroups == DEFAULT_NEWGROUPS
+        assert newsgroups >= TEST_GROUPS
         nntp_client.quit()
 
 
 def test_nntp_client_without_ssl() -> None:
     with nntp.NNTPClient("localhost", use_ssl=False) as nntp_client:
         newsgroups = newsgroup_names(nntp_client)
-        assert newsgroups == DEFAULT_NEWGROUPS
+        assert newsgroups >= TEST_GROUPS
 
 
 @mock.patch.dict(os.environ, {"PYNNTP_TLS_INSECURE": "1"})
 def test_nntp_client_with_ssl() -> None:
     with nntp.NNTPClient("localhost", 563, use_ssl=True) as nntp_client:
         newsgroups = newsgroup_names(nntp_client)
-        assert newsgroups == DEFAULT_NEWGROUPS
+        assert newsgroups >= TEST_GROUPS
 
 
 @mock.patch.dict(os.environ, {"PYNNTP_TLS_INSECURE": "1"})
 def test_nntp_client_with_ssl_starttls() -> None:
+    require("STARTTLS")
     with nntp.NNTPClient(
         "localhost", use_ssl=True, ssl_mode=SSLMode.STARTTLS
     ) as nntp_client:
         newsgroups = newsgroup_names(nntp_client)
-        assert newsgroups == DEFAULT_NEWGROUPS
+        assert newsgroups >= TEST_GROUPS
 
 
 @pytest.mark.parametrize(
@@ -96,6 +100,8 @@ def test_nntp_client_with_ssl_starttls() -> None:
     ],
 )
 def test_post(newsgroup: str) -> None:
+    if newsgroup == "junk":
+        require_inn()
     message_id = f"<pynntp-post-{uuid4().hex}@example.test>"
     headers = {
         "Subject": f"Test post to {newsgroup}",
@@ -104,16 +110,18 @@ def test_post(newsgroup: str) -> None:
         "Message-ID": message_id,
     }
     with nntp.NNTPClient("localhost") as nntp_client:
-        assert (
+        check_posted(
             nntp_client.post(
                 headers=headers, body=f"This is a test post to {newsgroup}"
-            )
-            == message_id
+            ),
+            message_id,
         )
 
 
 @pytest.mark.parametrize("newsgroup", ["local.general", "local.test", "junk"])
 def test_list_active(newsgroup: str) -> None:
+    if newsgroup == "junk":
+        require_inn()
     with nntp.NNTPClient("localhost") as nntp_client:
         articles = list(nntp_client.list_active(newsgroup))
         assert len(articles) == 1
@@ -142,11 +150,14 @@ def test_list_active(newsgroup: str) -> None:
     ],
 )
 def test_article(newsgroup: str) -> None:
+    if newsgroup == "junk":
+        require_inn()
     message_id = f"<pynntp-article-{uuid4().hex}@example.test>"
     subject = f"Article regression {message_id}"
     body = f"This is a test article for {newsgroup}"
     with nntp.NNTPClient("localhost") as nntp_client:
-        nntp_client.post(
+        post_and_wait(
+            nntp_client,
             {
                 "Subject": subject,
                 "From": "pynntp tests <test@example.test>",
