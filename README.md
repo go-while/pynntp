@@ -126,11 +126,13 @@ sudo sh tests/integration/inn2/setup.sh   # Debian/Ubuntu: installs and configur
 PYNNTP_INTEGRATION=1 pytest
 ```
 
-They also run against other servers on localhost:119 (and 563 for TLS). A
-test that needs an optional feature (COMPRESS, STARTTLS, IHAVE, NEWNEWS, HDR,
-OVER, POST) is skipped when the server does not list it in CAPABILITIES, and
-tests of INN's own setup are skipped on other servers. The server needs the
-groups `local.general` and `local.test`, open for reading and posting.
+They also run against other servers on localhost:119 (plain and STARTTLS) and
+563 (implicit TLS); like with INN, use a disposable server, as they post
+articles. A test that needs an optional feature (COMPRESS, STARTTLS, IHAVE,
+NEWNEWS, HDR, OVER) is skipped when the server does not list it in
+CAPABILITIES, and tests of INN's own setup are skipped on other servers. The
+server needs the groups `local.general` and `local.test`, open for reading and
+posting.
 
 | Variable | Default | Meaning |
 |---|---|---|
