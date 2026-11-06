@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+import nntp
 from tests.integration import portable
 from tests.scripted import ReadArticle, ScriptedServer
 
@@ -72,3 +73,44 @@ def test_check_posted_accepts_true_or_the_id() -> None:
     portable.check_posted(True, NEW)
     with pytest.raises(AssertionError):
         portable.check_posted("<other@example.test>", NEW)
+
+
+@pytest.fixture
+def no_cache() -> None:
+    portable.capabilities.cache_clear()
+
+
+@pytest.mark.usefixtures("no_cache")
+@pytest.mark.parametrize(
+    ("reply", "skips"),
+    [
+        (b"101 caps\r\nVERSION 2\r\nIMPLEMENTATION INN 2.7.4\r\nHDR\r\n.\r\n", False),
+        (b"101 caps\r\nVERSION 2\r\nOVER\r\n.\r\n", True),
+        (b"500 what?\r\n", True),
+    ],
+)
+def test_require_skips_only_unadvertised(
+    scripted_server: Callable[..., ScriptedServer],
+    monkeypatch: pytest.MonkeyPatch,
+    reply: bytes,
+    skips: bool,
+) -> None:
+    server = scripted_server({"CAPABILITIES": reply})
+    monkeypatch.setattr(portable, "connect", server.client)
+    if skips:
+        with pytest.raises(pytest.skip.Exception):
+            portable.require("HDR")
+    else:
+        portable.require("HDR")
+        portable.require_inn()
+
+
+@pytest.mark.usefixtures("no_cache")
+def test_capabilities_error_is_a_failure(
+    scripted_server: Callable[..., ScriptedServer],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = scripted_server({"CAPABILITIES": b"480 authentication required\r\n"})
+    monkeypatch.setattr(portable, "connect", server.client)
+    with pytest.raises(nntp.NNTPTemporaryError):
+        portable.require("HDR")

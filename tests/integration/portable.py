@@ -31,6 +31,11 @@ TLS_CAFILE = os.environ.get("PYNNTP_TLS_CAFILE", "/etc/news/pynntp-cert.pem")
 POST_WAIT = float(os.environ.get("PYNNTP_POST_WAIT", "10"))
 
 
+def connect() -> nntp.NNTPClient:
+    """Connect to the server under test (offline tests replace this)."""
+    return nntp.NNTPClient("localhost")
+
+
 @functools.cache
 def capabilities() -> frozenset[str]:
     """Return what the server on localhost lists in CAPABILITIES, upper-cased.
@@ -38,10 +43,14 @@ def capabilities() -> frozenset[str]:
     Each line is included whole and as its first word, so both "COMPRESS" and
     "COMPRESS DEFLATE" match. A server without CAPABILITIES gives an empty set.
     """
-    with nntp.NNTPClient("localhost") as client:
+    with connect() as client:
         try:
             lines = [line.upper() for line in client.capabilities()]
-        except nntp.NNTPReplyError:
+        except nntp.NNTPPermanentError as exc:
+            # 500/501: no CAPABILITIES at all. Other errors (480, 400, 503)
+            # are failures, not a missing feature.
+            if exc.code not in (500, 501):
+                raise
             return frozenset()
     found = set(lines)
     found.update(line.split()[0] for line in lines if line.split())
@@ -52,6 +61,16 @@ def require(capability: str) -> None:
     """Skip the test unless the server advertises the capability."""
     if capability.upper() not in capabilities():
         pytest.skip(f"the server does not advertise {capability}")
+
+
+def require_inn() -> None:
+    """Skip the test unless the server is INN (IMPLEMENTATION INN ...).
+
+    For tests of INN's own setup rather than of NNTP, such as the junk group
+    and the default newsgroups that inn2/setup.sh leaves in place.
+    """
+    if not any(line.startswith("IMPLEMENTATION INN") for line in capabilities()):
+        pytest.skip("tests INN's own setup")
 
 
 def check_posted(result: str | bool, message_id: str) -> None:
