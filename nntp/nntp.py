@@ -776,7 +776,7 @@ class BaseNNTPClient:
                 or self.compressed
                 or not self.username
                 or command[:2] == ["MODE", "READER"]
-                or command[:1] == ["AUTHINFO"]
+                or command[:1] in (["AUTHINFO"], ["STARTTLS"])
             ):
                 raise
             self.login()
@@ -804,7 +804,7 @@ class BaseNNTPClient:
             raise NNTPError("Connection is closed")
         cmd = f"{verb} {args}\r\n" if args else f"{verb}\r\n"
         try:
-            self._sendall(cmd.encode(self.encoding))
+            self._sendall(cmd.encode(self.encoding, self.errors))
         except TimeoutError as exc:
             # A partial command may have reached the server; don't reuse it.
             with contextlib.suppress(OSError):
@@ -845,7 +845,7 @@ class BaseNNTPClient:
                 raise NNTPError("A password is required for authentication")
             code, message = self._command_once("AUTHINFO PASS", password)
         if code != 281:
-            raise NNTPReplyError(code, message)
+            raise self._unexpected(code, message)
         self.username, self.password = username, password
 
     def compress(self) -> None:
@@ -1084,7 +1084,7 @@ class NNTPClient(BaseNNTPClient):
             self.login()
             return False
         if code not in (200, 201):
-            raise NNTPReplyError(code, message)
+            raise self._unexpected(code, message)
 
         return code == 200
 
