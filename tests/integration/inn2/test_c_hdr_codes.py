@@ -3,13 +3,17 @@
 from uuid import uuid4
 
 import nntp
+from tests.integration.portable import post_and_wait, require
 
 
 def test_hdr_message_id() -> None:
+    require("HDR")
+    require("POST")
     message_id = f"<pynntp-hdr-{uuid4().hex}@example.test>"
     subject = f"HDR regression {message_id}"
     with nntp.NNTPClient("localhost") as client:
-        client.post(
+        post_and_wait(
+            client,
             {
                 "From": "pynntp tests <test@example.test>",
                 "Newsgroups": "local.test",
