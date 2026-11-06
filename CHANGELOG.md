@@ -9,7 +9,8 @@ section before upgrading.
 
 ### Changed (may need changes in your code)
 
-- **Python 3.10 or newer is required** (3.9 reached end of life in October 2025).
+- **Python 3.10 or newer is required** (3.9 reached end of life in October
+  2025).
 - **LIST ACTIVE and NEWGROUPS return the right water marks.** They read the
   server's `name high low status` order; before, `low` and `high` were
   swapped. `Newsgroup(name, low, high, status)` is unchanged, so remove any
@@ -26,8 +27,9 @@ section before upgrading.
   iterator kept in a variable still blocks until you close or drop it.
 - **yEnc bodies are checked.** `body()` and `article()` check decoded yEnc data
   against the size (required) and, when the trailer has one, the CRC
-  (`pcrc32`, or `crc32` for single-part posts) of its `=yend` trailer, and raise `NNTPDataError` on a mismatch or a missing trailer
-  instead of returning corrupt data.
+  (`pcrc32`, or `crc32` for single-part posts) of its `=yend` trailer, and
+  raise `NNTPDataError` on a mismatch or a missing trailer instead of
+  returning corrupt data.
 - **POST checks the whole article first.** `post()` prepares and validates the
   entire article before sending anything (iterable bodies are consumed up
   front; above 1 MiB through a temporary file). NUL or bare CR in the body
@@ -41,9 +43,9 @@ section before upgrading.
 - **Error types.** Socket timeouts (connect, TLS handshake, sending, reading)
   raise `NNTPTimeoutError` (an `NNTPError` and a `TimeoutError`) and close the
   connection; a `TimeoutError` raised by your own body iterator while `post()`
-  prepares the article is passed through and the connection stays usable; header, DATE and newsgroup parse
-  errors raise `NNTPDataError` instead of `ValueError`; a closed connection
-  raises `NNTPError`.
+  prepares the article is passed through and the connection stays usable;
+  header, DATE and newsgroup parse errors raise `NNTPDataError` instead of
+  `ValueError`; a closed connection raises `NNTPError`.
 - **`PYNNTP_TLS_INSECURE`** turns certificate checks off only for `1`, `true`,
   `yes` or `on`; before, any value (even `0`) did.
 - **STARTTLS** never sends AUTHINFO before TLS is up; with reader mode on
@@ -119,13 +121,17 @@ section before upgrading.
 - CI on GitHub: ruff, ruff format, mypy --strict, and the tests on Python
   3.10-3.15 and free-threaded 3.14t against INN from Ubuntu's `inn2` package
   (`tests/integration/inn2/setup.sh`). The 3.14t/3.15 matrix, the pre-commit
-  hook updates and the quarterly schedule of pre-commit.ci's hook-update PRs come from Christian
-  Clauss's upstream PRs #100, #101 and #98.
+  hook updates and the quarterly schedule of pre-commit.ci's hook-update PRs
+  come from Christian Clauss's upstream PRs #100, #101 and #98.
 - Dependencies in `poetry.lock` refreshed; `pre-commit` is no longer a Poetry
   dev dependency.
-- `tests/integration/inn2/setup.sh` prepares a disposable Debian/Ubuntu test host
-  (inn2 with TLS, NEWNEWS and IHAVE for localhost, no load limits).
-- New changes add a one-line fragment in `changes/` (see `changes/README.md`).
+- `tests/integration/inn2/setup.sh` prepares a disposable Debian/Ubuntu test
+  host (inn2 with TLS, NEWNEWS and IHAVE for localhost, no load limits).
+- A GitHub release builds the sdist and wheel, tests the wheel with the
+  sdist's tests and attaches both to the release; upstream's PyPI upload
+  workflow is replaced, as the fork can't publish to PyPI.
+- New changes add a one-line fragment in `changes/` (see
+  `changes/README.md`).
 
 ## 2.0.1 (2024-09-29) and earlier
 
