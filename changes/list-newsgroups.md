@@ -1,0 +1,1 @@
+Changed: `list_newsgroups()` documents that servers may omit groups without descriptions (as INN does), so a newly created group can be missing from LIST NEWSGROUPS without being unavailable. Use `list_active()` for group discovery and water marks; this is server metadata, not client caching (#95).
