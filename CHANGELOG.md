@@ -54,6 +54,8 @@ section before upgrading.
   logs in and, if that succeeds, `mode_reader()` returns `False` (posting
   status unknown).
 - **LIST EXTENSIONS** is documented as obsolete; use `capabilities()`.
+- `list_newsgroups()` documents that servers may leave out groups without a
+  description (INN does, #95); use `list_active()` to find groups.
 - The `__main__` demo at the end of `nntp/nntp.py` is removed.
 - Package metadata uses PEP 621; the homepage, repository and issue URLs point
   to the maintained fork (the documentation URL is still upstream's).
@@ -62,6 +64,14 @@ section before upgrading.
 
 - `stat()`, `listgroup()` and `over()` (RFC 3977; #43, #45, #46).
 - `ihave()` (#42).
+- `compress()`: COMPRESS DEFLATE (RFC 8054, #41). Commands, replies and articles
+  are compressed once it is active; the `compressed` property tells whether it
+  is. Afterwards the client refuses AUTHINFO, STARTTLS, MODE READER and another
+  COMPRESS itself and does no automatic login, so credentials are never sent
+  compressed; with TLS-level compression active, COMPRESS, STARTTLS and MODE
+  READER are refused. A corrupt compressed stream, or data after its end,
+  closes the connection. Note: INN 2.6's nnrpd can stall on compressed POST or
+  IHAVE articles; INN 2.7 is fine.
 - `login()`: explicit AUTHINFO USER/PASS with given or stored credentials.
 - `ssl_context` argument for both client classes.
 - `NNTPSyncError` and `NNTPTimeoutError` are exported.
@@ -102,11 +112,13 @@ section before upgrading.
 
 ### Development
 
-- Offline tests against a scripted NNTP server (`tests/scripted.py`); about 450
-  tests in all.
+- Offline tests against a scripted NNTP server (`tests/scripted.py`, which can
+  also speak COMPRESS DEFLATE); about 500 tests in all.
 - CI on GitHub: ruff, ruff format, mypy --strict, and the tests on Python
-  3.10-3.14 against INN from Ubuntu's `inn2` package
-  (`tests/integration/inn2/setup.sh`).
+  3.10-3.15 and free-threaded 3.14t against INN from Ubuntu's `inn2` package
+  (`tests/integration/inn2/setup.sh`). The 3.14t/3.15 matrix, the pre-commit
+  hook updates and the quarterly pre-commit.ci schedule come from Christian
+  Clauss's upstream PRs #100, #101 and #98.
 - Dependencies in `poetry.lock` refreshed; `pre-commit` is no longer a Poetry
   dev dependency.
 - `tests/integration/inn2/setup.sh` prepares a disposable Debian/Ubuntu test host

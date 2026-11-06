@@ -1,1 +1,0 @@
-Changed: CI also tests free-threaded Python 3.14t and Python 3.15, the pre-commit hooks are updated, and pre-commit.ci proposes hook updates quarterly instead of monthly (from upstream PRs #100, #101 and #98 by Christian Clauss).

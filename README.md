@@ -107,6 +107,7 @@ NNTP commands that are currently supported include:
 - XZVER
 - XPAT
 - XFEATURE COMPRESS GZIP
+- COMPRESS DEFLATE (RFC 8054; `compress()`)
 
 ## Development
 

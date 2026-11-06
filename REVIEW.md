@@ -39,9 +39,11 @@ before it was merged. The merge commits are in `git log --first-parent develop-0
 | Low: `__main__` demo block | removed | d49534c |
 | Low: generator methods send their command only on the first `next()` | fixed (sent at call time) | b58798d, 2bc177c |
 | Missing: IHAVE (#42) | added | 4cf37b8 |
+| Missing: COMPRESS DEFLATE (#41) | added | 25a67ee, 19d12c3, 5064801 |
+| Upstream PRs #98, #100, #101 (cclauss) | adopted | ec6554f |
 
 Still open: single-line session commands (AUTHINFO, MODE READER, STARTTLS, QUIT) don't drain an unexpected multi-line success code; CAPABILITIES are not re-read after TLS or authentication (no capability cache yet), the publish
-workflow, COMPRESS DEFLATE (#41), AUTHINFO SASL, repeated headers and RFC 2047 decoding.
+workflow, AUTHINFO SASL, repeated headers and RFC 2047 decoding.
 
 ## Summary
 
