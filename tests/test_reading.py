@@ -729,3 +729,20 @@ def test_compress_tail_after_stream_end_closes(scripted_server: Start) -> None:
     with pytest.raises(nntp.NNTPDataError, match="COMPRESS stream corrupt"):
         client._start_compression()  # noqa: SLF001
     assert client.socket.fileno() == -1
+
+
+def test_compress_bytes_in_later_read_after_stream_end(scripted_server: Start) -> None:
+    """The stream ends cleanly, garbage follows in a later read (review: sol)."""
+    server = scripted_server(
+        {
+            "COMPRESS DEFLATE": StartCompression(),
+            "DATE": [Raw(_finished(DATE))],
+            "HELP": [Raw(b"garbage")],
+        }
+    )
+    client = server.client()
+    _start(client)
+    assert client.date() == DATE_VALUE  # the last reply of the stream is fine
+    with pytest.raises(nntp.NNTPDataError, match="COMPRESS stream corrupt"):
+        client.help()
+    assert client.socket.fileno() == -1
