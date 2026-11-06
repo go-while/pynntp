@@ -99,6 +99,7 @@ NNTP commands that are currently supported include:
 - HEAD
 - BODY (yEnc bodies are decoded and checked against their size and CRC)
 - POST
+- IHAVE
 - HDR
 - OVER
 - XHDR
