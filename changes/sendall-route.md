@@ -1,1 +1,0 @@
-Fixed: POST and IHAVE send the complete preflighted article through the shared transport writer, so headers, body and terminator are compressed after COMPRESS DEFLATE. Dot-stuffing, bounded-memory preflight and timeout cleanup are unchanged; uncertain transfers are not retried.

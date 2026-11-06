@@ -99,6 +99,7 @@ NNTP commands that are currently supported include:
 - HEAD
 - BODY (yEnc bodies are decoded and checked against their size and CRC)
 - POST
+- IHAVE
 - HDR
 - OVER
 - XHDR
@@ -107,6 +108,7 @@ NNTP commands that are currently supported include:
 - XZVER
 - XPAT
 - XFEATURE COMPRESS GZIP
+- COMPRESS DEFLATE (RFC 8054; `compress()`)
 
 ## Development
 
