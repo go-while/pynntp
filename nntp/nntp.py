@@ -773,6 +773,7 @@ class BaseNNTPClient:
             if (
                 e.code != 480
                 or self._tls_pending
+                or self.compressed
                 or not self.username
                 or command[:2] == ["MODE", "READER"]
                 or command[:1] == ["AUTHINFO"]
@@ -784,6 +785,21 @@ class BaseNNTPClient:
     def _command_once(self, verb: str, args: str | None = None) -> tuple[int, str]:
         """Send one command without automatic authentication or retries."""
         self._validate_command(verb, args)
+        parts = f"{verb} {args or ''}".upper().split()
+        if self.compressed and (
+            parts[:1] in (["AUTHINFO"], ["STARTTLS"], ["COMPRESS"])
+            or parts[:2] == ["MODE", "READER"]
+        ):
+            raise NNTPError("Command unavailable after compression")
+        if (
+            (
+                parts[:1] in (["COMPRESS"], ["STARTTLS"])
+                or parts[:2] == ["MODE", "READER"]
+            )
+            and isinstance(self.socket, ssl.SSLSocket)
+            and self.socket.compression() is not None
+        ):
+            raise NNTPError("Command unavailable while TLS compression is active")
         if self.socket.fileno() == -1:
             raise NNTPError("Connection is closed")
         cmd = f"{verb} {args}\r\n" if args else f"{verb}\r\n"
@@ -810,6 +826,8 @@ class BaseNNTPClient:
         and credentials are never sent while a requested STARTTLS is pending.
         If the server requests a password, an empty password raises NNTPError.
         """
+        if self.compressed:
+            raise NNTPError("Cannot authenticate after compression")
         if self._generating:
             raise NNTPSyncError("Command issued while a generator is active")
         if self._tls_pending:
@@ -829,6 +847,20 @@ class BaseNNTPClient:
         if code != 281:
             raise NNTPReplyError(code, message)
         self.username, self.password = username, password
+
+    def compress(self) -> None:
+        """Enable RFC 8054 DEFLATE compression for this connection.
+
+        Authenticate and negotiate TLS before calling this method: after
+        compression, AUTHINFO, STARTTLS and MODE READER are prohibited.
+        Compression can weaken TLS confidentiality for sensitive data.
+        INN 2.6 nnrpd may stall receiving compressed POST or IHAVE articles;
+        avoid compression for article uploads to those servers.
+        """
+        code, message = self.command("COMPRESS", "DEFLATE")
+        if code != 206:
+            raise self._unexpected(code, message)
+        self._start_compression()
 
     def close(self) -> None:
         """Closes the connection at the client.
