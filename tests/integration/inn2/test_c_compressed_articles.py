@@ -31,7 +31,7 @@ def test_compressed_article_round_trip(verb: str) -> None:
     require(verb)
     with nntp.NNTPClient("localhost", reader=False) as client:
         if _inn_version(list(client.capabilities())) < (2, 7, 2):
-            pytest.skip("nnrpd before INN 2.7.2 hangs on compressed uploads")
+            pytest.skip("nnrpd before INN 2.7.2 may hang on compressed uploads")
         client.compress()
         for _ in range(2):
             message_id = f"<pynntp-compressed-{uuid4().hex}@example.test>"

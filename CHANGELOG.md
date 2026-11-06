@@ -71,7 +71,7 @@ section before upgrading.
   through the COMPRESS layer. With TLS-level compression active, COMPRESS,
   STARTTLS and MODE READER are refused, while AUTHINFO stays allowed as
   RFC 8054 permits. A corrupt compressed stream, or data after its end,
-  closes the connection. Note: nnrpd before INN 2.7.2 hangs on compressed
+  closes the connection. Note: nnrpd before INN 2.7.2 may hang on compressed
   POST or IHAVE articles when TLS is not active (fixed in INN 2.7.2; we saw
   it with 2.6.4).
 - `login()`: explicit AUTHINFO USER/PASS with given or stored credentials.
