@@ -2060,7 +2060,7 @@ class NNTPClient(BaseNNTPClient):
                 if code != ready:
                     raise self._unexpected(code, message)
                 while chunk := article.read(65536):
-                    self.socket.sendall(chunk)
+                    self._sendall(chunk)
                 code, message = self.status()
             except TimeoutError as exc:
                 # The server may hold a partial article or a delayed status;
