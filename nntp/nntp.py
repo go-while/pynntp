@@ -174,7 +174,13 @@ class _TextReply(Iterator[str]):
         self._errors = errors
 
     def __next__(self) -> str:
-        return next(self._reply).decode(self._encoding, self._errors)
+        line = next(self._reply)
+        try:
+            return line.decode(self._encoding, self._errors)
+        except BaseException:
+            # don't leave the reply registered while the error is held
+            self._reply.close()
+            raise
 
     def close(self) -> None:
         """Read and drop the rest of the reply now."""
@@ -191,6 +197,8 @@ def _inflate(inflate: zlib._Decompress, data: bytes) -> bytes:
 
 def _check_yenc(begin: bytes, trailer: bytes, data: bytes, crc32: int) -> None:
     """Raise NNTPDataError if decoded yEnc data doesn't match its trailer."""
+    if trailer and not begin:
+        raise NNTPDataError("yEnc header (=ybegin) missing")
     if begin and not trailer:
         raise NNTPDataError("yEnc trailer (=yend) missing")
     if trailer:
@@ -444,10 +452,9 @@ class BaseNNTPClient:
         parts = line.split(None, 1)
         text = line.decode(self.encoding, self.errors)
 
-        try:
-            code, data = int(parts[0]), b""
-        except (IndexError, ValueError):
+        if not parts or re.fullmatch(rb"[0-9]{3}", parts[0]) is None:
             raise NNTPProtocolError(f"Invalid status line: {text!r}")
+        code, data = int(parts[0]), b""
 
         if code < 100 or code >= 600:
             raise NNTPProtocolError(f"Invalid status line: {text!r}")
@@ -626,6 +633,12 @@ class BaseNNTPClient:
         # check crc32
         if crc32 != decoder.crc32:
             raise NNTPDataError("Bad yEnc CRC")
+
+        # a line without its CRLF at the end means the data was cut short
+        buf.write(inflate.flush())
+        yield from buf
+        if buf.read():
+            raise NNTPDataError("Compressed reply ends in a partial line")
 
     @property
     def _generating(self) -> bool:
@@ -1651,6 +1664,8 @@ class NNTPClient(BaseNNTPClient):
             body.append(line)
 
         data = b"".join(body)
+        if decode and not begin and data:
+            raise NNTPDataError("yEnc header (=ybegin) missing")
         _check_yenc(begin, trailer, data, decoder.crc32)
         return data
 
@@ -1672,7 +1687,8 @@ class NNTPClient(BaseNNTPClient):
                 integer. A msgid_article of None (the default) uses the current
                 article.
             decode: Force yenc decoding to be enabled or disabled. A value of
-                None (the default) attempts to determine this automatically.
+                None (the default) decodes when the body starts with
+                ``=ybegin``, as body() does; the Subject is not used.
 
         Returns:
             A 3-tuple of the article number, the article headers, and the
@@ -1690,21 +1706,15 @@ class NNTPClient(BaseNNTPClient):
         if code != 220:
             raise self._unexpected(code, message)
 
-        parts = message.split(None, 1)
-
-        try:
-            articleno = int(parts[0])
-        except ValueError:
-            raise NNTPProtocolError(message)
-
-        # headers and body come from one reply, so read both from one iterator
+        # headers and body come from one reply, so read both from one iterator;
+        # register it first so that a bad status still drains it
         lines = self._info(code, message)
         try:
+            try:
+                articleno = int(message.split(None, 1)[0])
+            except (IndexError, ValueError):
+                raise NNTPProtocolError(f"Invalid ARTICLE status: {message!r}")
             headers = self._parse_headers(lines)
-
-            if decode is None and "yEnc" in headers.get("subject", ""):
-                decode = True
-
             body = self._body(lines, decode=decode)
         finally:
             lines.close()

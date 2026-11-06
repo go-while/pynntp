@@ -746,3 +746,102 @@ def test_compress_bytes_in_later_read_after_stream_end(scripted_server: Start) -
     with pytest.raises(nntp.NNTPDataError, match="COMPRESS stream corrupt"):
         client.help()
     assert client.socket.fileno() == -1
+
+
+# Release cross review (R1)
+
+
+def test_article_plain_body_with_yenc_in_subject(scripted_server: Start) -> None:
+    """The Subject doesn't switch on yEnc decoding; the body decides (X1-01)."""
+    article = (
+        b"220 1 <a@b> article\r\nSubject: Question about yEnc\r\n\r\n"
+        b"Hello world!\r\n.\r\n"
+    )
+    server = scripted_server(
+        {
+            "ARTICLE": article,
+            "BODY": article.replace(
+                b"220 1 <a@b> article\r\nSubject: Question about yEnc\r\n\r\n",
+                b"222 1 <a@b> body\r\n",
+            ),
+        }
+    )
+    client = server.client()
+    assert client.article("<a@b>")[2] == b"Hello world!\r\n"
+    assert client.body("<a@b>") == b"Hello world!\r\n"
+
+
+def test_article_yenc_body_detected(scripted_server: Start) -> None:
+    body = _yenc_body(YDATA).split(b"\r\n", 1)[1]
+    article = b"220 1 <a@b> article\r\nSubject: a file\r\n\r\n" + body
+    server = scripted_server({"ARTICLE": article, "DATE": DATE})
+    client = server.client()
+    assert client.article("<a@b>")[2] == YDATA
+    assert client.date() == DATE_VALUE
+
+
+def test_forced_decode_without_ybegin(scripted_server: Start) -> None:
+    client = _body_server(scripted_server, b"222 0 <a@b> body\r\nplain\r\n.\r\n")
+    with pytest.raises(nntp.NNTPDataError, match="=ybegin"):
+        client.body("<a@b>", decode=True)
+    assert client.date() == DATE_VALUE
+
+
+@pytest.mark.parametrize("status", [b"220 bad <a@b> article", b"220"])
+def test_article_bad_status_drains(scripted_server: Start, status: bytes) -> None:
+    """A bad article number in the 220 line doesn't leave the article (X1-03)."""
+    article = status + b"\r\nSubject: s\r\n\r\nbody\r\n.\r\n"
+    server = scripted_server({"ARTICLE": article, "DATE": DATE})
+    client = server.client()
+    with pytest.raises(nntp.NNTPProtocolError, match="Invalid ARTICLE status"):
+        client.article("<a@b>")
+    assert client.date() == DATE_VALUE
+
+
+def test_info_decode_error_releases_reply(scripted_server: Start) -> None:
+    """A decoding error doesn't keep the reply registered while it's held (X1-05)."""
+    server = scripted_server(
+        {"HELP": b"100 help\r\n\xffbad\r\nrest\r\n.\r\n", "DATE": DATE}
+    )
+    client = server.client()
+    client.errors = "strict"
+    code, message = client.command("HELP")
+    try:
+        list(client.info(code, message))
+    except UnicodeDecodeError as exc:
+        held = exc  # keeps the traceback, and with it the reply, alive
+    assert held.__traceback__ is not None
+    client.errors = "surrogateescape"
+    assert client.date() == DATE_VALUE
+
+
+def test_xzver_truncated_stream(scripted_server: Start) -> None:
+    """Cut DEFLATE data in a valid yEnc wrapper raises, not partial rows (X1-04)."""
+    deflate = zlib.compressobj(9, zlib.DEFLATED, -15)
+    data = (deflate.compress(OVERVIEW) + deflate.flush())[:-4]
+    wire = [
+        b"=ybegin line=128 size=%d name=xzver" % len(data),
+        *_yenc_lines(data),
+        b"=yend size=%d crc32=%08x" % (len(data), binascii.crc32(data)),
+    ]
+    stuffed = b"".join((b"." + x if x.startswith(b".") else x) + b"\r\n" for x in wire)
+    server = scripted_server(
+        {
+            "LIST OVERVIEW.FMT": OVERVIEW_FMT,
+            "XZVER": b"224 compressed overview\r\n" + stuffed + b".\r\n",
+            "DATE": DATE,
+        }
+    )
+    client = server.client()
+    with pytest.raises(nntp.NNTPDataError, match="partial line"):
+        list(client.xzver((1, 2)))
+    assert client.date() == DATE_VALUE
+
+
+@pytest.mark.parametrize("code", [b"+111", b"0111", b"1_11", b"11"])
+def test_status_code_three_digits(scripted_server: Start, code: bytes) -> None:
+    """Only three ASCII digits are a status code (X1-08)."""
+    server = scripted_server({"DATE": code + b" 20260102030405\r\n"})
+    client = server.client()
+    with pytest.raises(nntp.NNTPProtocolError, match="Invalid status line"):
+        client.date()
