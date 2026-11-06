@@ -12,7 +12,7 @@ import pytest
 
 import nntp
 from nntp.types import SSLMode
-from tests.scripted import CLOSE
+from tests.scripted import CLOSE, StartCompression
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -20,6 +20,111 @@ if TYPE_CHECKING:
     from tests.scripted import ScriptedServer
 
     Start = Callable[..., ScriptedServer]
+
+
+def test_compress_enables_stream_and_connection_reuse(scripted_server: Start) -> None:
+    server = scripted_server(
+        {"COMPRESS DEFLATE": StartCompression(), "DATE": b"111 20260102030405\r\n"}
+    )
+    client = server.client()
+    client.compress()
+    assert client.compressed
+    assert client.date().year == 2026
+    client.quit()
+    assert server.received == ["MODE READER", "COMPRESS DEFLATE", "DATE", "QUIT"]
+
+
+@pytest.mark.parametrize(
+    ("verb", "args"),
+    [
+        ("AUTHINFO USER", "user"),
+        ("authinfo", "PASS secret"),
+        ("MODE", "READER"),
+        ("mode  reader", None),
+        ("STARTTLS", None),
+        ("COMPRESS", "DEFLATE"),
+    ],
+)
+def test_compression_rejects_forbidden_raw_commands(
+    scripted_server: Start, verb: str, args: str | None
+) -> None:
+    server = scripted_server({"COMPRESS DEFLATE": StartCompression()})
+    client = server.client(username="user", password="pass")  # noqa: S106
+    client.compress()
+    with pytest.raises(nntp.NNTPError, match="compress"):
+        client.command(verb, args)
+    assert server.received == ["MODE READER", "COMPRESS DEFLATE"]
+    client.close()
+
+
+def test_compression_blocks_login_and_second_compress(scripted_server: Start) -> None:
+    server = scripted_server({"COMPRESS DEFLATE": StartCompression()})
+    client = server.client(username="user", password="pass")  # noqa: S106
+    client.compress()
+    with pytest.raises(nntp.NNTPError, match="compress"):
+        client.login()
+    with pytest.raises(nntp.NNTPError, match="compress"):
+        client.compress()
+    assert server.received == ["MODE READER", "COMPRESS DEFLATE"]
+    client.close()
+
+
+def test_compression_disables_automatic_authentication(scripted_server: Start) -> None:
+    server = scripted_server(
+        {"COMPRESS DEFLATE": StartCompression(), "DATE": b"480 authenticate\r\n"}
+    )
+    client = server.client(username="user", password="pass")  # noqa: S106
+    client.compress()
+    with pytest.raises(nntp.NNTPTemporaryError, match="480"):
+        client.date()
+    assert server.received == ["MODE READER", "COMPRESS DEFLATE", "DATE"]
+    client.close()
+
+
+@pytest.mark.parametrize("response", [b"403 unavailable\r\n", b"502 unavailable\r\n"])
+def test_compress_refusal_keeps_connection_plain(
+    scripted_server: Start, response: bytes
+) -> None:
+    server = scripted_server(
+        {"COMPRESS DEFLATE": response, "DATE": b"111 20260102030405\r\n"}
+    )
+    client = server.client()
+    with pytest.raises(nntp.NNTPReplyError):
+        client.compress()
+    assert not client.compressed
+    assert client.date().year == 2026
+    client.close()
+
+
+def test_compress_blocks_when_tls_compression_active(scripted_server: Start) -> None:
+    client = scripted_server().client()
+    original = client.socket
+    tls = mock.Mock(spec=ssl.SSLSocket)
+    tls.fileno.return_value = original.fileno()
+    tls.close.side_effect = original.close
+    tls.compression.return_value = "DEFLATE"
+    client.socket = tls
+    try:
+        with pytest.raises(nntp.NNTPError, match="compress"):
+            client.compress()
+        tls.sendall.assert_not_called()
+    finally:
+        client.close()
+
+
+def test_compress_unexpected_multiline_reply_drains(scripted_server: Start) -> None:
+    server = scripted_server(
+        {
+            "COMPRESS DEFLATE": b"100 help\r\ntext\r\n.\r\n",
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client()
+    with pytest.raises(nntp.NNTPReplyError):
+        client.compress()
+    assert not client.compressed
+    assert client.date().year == 2026
+    client.close()
 
 
 @pytest.mark.parametrize("first", ["close", "quit"])
