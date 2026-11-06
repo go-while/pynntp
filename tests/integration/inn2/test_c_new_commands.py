@@ -5,22 +5,23 @@ from uuid import uuid4
 import pytest
 
 import nntp
+from tests.integration.portable import post_and_wait, require
 
 
 def test_stat_listgroup_and_over() -> None:
+    require("OVER")
+    require("POST")
     message_id = f"<pynntp-commands-{uuid4().hex}@example.test>"
     with nntp.NNTPClient("localhost") as client:
-        assert (
-            client.post(
-                {
-                    "From": "pynntp tests <test@example.test>",
-                    "Newsgroups": "local.test",
-                    "Message-ID": message_id,
-                    "Subject": "New commands regression",
-                },
-                b"New commands body\n",
-            )
-            == message_id
+        post_and_wait(
+            client,
+            {
+                "From": "pynntp tests <test@example.test>",
+                "Newsgroups": "local.test",
+                "Message-ID": message_id,
+                "Subject": "New commands regression",
+            },
+            b"New commands body\n",
         )
         assert client.stat(message_id) == (0, message_id)
         _total, _first, last, _group = client.group("local.test")

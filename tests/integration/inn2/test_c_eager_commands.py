@@ -5,11 +5,15 @@ from uuid import uuid4
 import pytest
 
 import nntp
+from tests.integration.portable import post_and_wait, require
 
 
 def test_unread_listgroup_and_over_ownership() -> None:
+    require("OVER")
+    require("POST")
     with nntp.NNTPClient("localhost") as client:
-        client.post(
+        post_and_wait(
+            client,
             {
                 "From": "pynntp tests <test@example.test>",
                 "Newsgroups": "local.test",
