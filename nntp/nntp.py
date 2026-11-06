@@ -792,11 +792,14 @@ class BaseNNTPClient:
         ):
             raise NNTPError("Command unavailable after compression")
         if (
-            parts[:1] == ["COMPRESS"]
+            (
+                parts[:1] in (["COMPRESS"], ["STARTTLS"])
+                or parts[:2] == ["MODE", "READER"]
+            )
             and isinstance(self.socket, ssl.SSLSocket)
             and self.socket.compression() is not None
         ):
-            raise NNTPError("TLS compression is already active")
+            raise NNTPError("Command unavailable while TLS compression is active")
         if self.socket.fileno() == -1:
             raise NNTPError("Connection is closed")
         cmd = f"{verb} {args}\r\n" if args else f"{verb}\r\n"

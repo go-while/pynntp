@@ -112,6 +112,41 @@ def test_compress_blocks_when_tls_compression_active(scripted_server: Start) -> 
         client.close()
 
 
+@pytest.mark.parametrize(
+    ("verb", "args"), [("MODE", "READER"), ("mode  reader", None), ("STARTTLS", None)]
+)
+def test_tls_compression_blocks_reader_and_starttls(
+    scripted_server: Start, verb: str, args: str | None
+) -> None:
+    client = scripted_server().client()
+    original = client.socket
+    tls = mock.Mock(spec=ssl.SSLSocket)
+    tls.fileno.return_value = original.fileno()
+    tls.close.side_effect = original.close
+    tls.compression.return_value = "DEFLATE"
+    client.socket = tls
+    try:
+        with pytest.raises(nntp.NNTPError, match="compress"):
+            client.command(verb, args)
+        tls.sendall.assert_not_called()
+    finally:
+        client.close()
+
+
+def test_tls_compression_still_allows_login(scripted_server: Start) -> None:
+    server = scripted_server({"AUTHINFO USER user": b"281 accepted\r\n"})
+    client = server.client(username="user")
+    original = client.socket
+    tls = mock.Mock(spec=ssl.SSLSocket, wraps=original)
+    tls.compression = mock.Mock(return_value="DEFLATE")
+    client.socket = tls
+    try:
+        client.login()
+        assert server.received == ["MODE READER", "AUTHINFO USER user"]
+    finally:
+        client.close()
+
+
 def test_compress_unexpected_multiline_reply_drains(scripted_server: Start) -> None:
     server = scripted_server(
         {
