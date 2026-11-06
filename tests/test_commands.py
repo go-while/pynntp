@@ -13,7 +13,7 @@ import pytest
 
 import nntp
 from nntp.types import Newsgroup
-from tests.scripted import ReadArticle
+from tests.scripted import ReadArticle, StartCompression
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator
@@ -1319,3 +1319,180 @@ def test_list_newsgroups_can_omit_undescribed_active_group(
         "local.new",
         "Newly added description.",
     )
+
+
+def _compress_article_connection(client: nntp.NNTPClient) -> None:
+    """Use I6 directly until B9's public compress() command is available."""
+    assert client.command("COMPRESS DEFLATE")[0] == 206
+    client._start_compression()  # noqa: SLF001
+
+
+@pytest.mark.parametrize("verb", ["POST", "IHAVE"])
+@pytest.mark.parametrize("kind", ["text", "bytes", "lines", "spooled"])
+def test_compressed_article_transfer(
+    scripted_server: Start, verb: str, kind: str
+) -> None:
+    ready, accepted = (340, 240) if verb == "POST" else (335, 235)
+    message_id = "<compressed@example.test>"
+    server = scripted_server(
+        {
+            "COMPRESS DEFLATE": StartCompression(),
+            verb: ReadArticle(
+                f"{ready} send\r\n".encode(),
+                f"{accepted} accepted {message_id}\r\n".encode(),
+            ),
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client(reader=False, timeout=1)
+    _compress_article_connection(client)
+    # Two articles share the same compressor/dictionary, including the command
+    # between them. The large iterable spills to disk and crosses send chunks.
+    for _ in range(2):
+        body: str | bytes | Iterable[bytes]
+        if kind == "spooled":
+            line = b"." + b"x" * 65535
+            body = (line for _ in range(17))
+            wire_body = (b"." + line + b"\r\n") * 17
+        else:
+            text = "first\n.dot\r\n.\n\nlast\n"
+            body = text if kind == "text" else text.encode()
+            if kind == "lines":
+                body = iter([b"first", b".dot\r\n", b".\n", b"", b"last\n"])
+            wire_body = b"first\r\n..dot\r\n..\r\n\r\nlast\r\n"
+        args = (message_id,) if verb == "IHAVE" else ()
+        result = getattr(client, verb.lower())(*args, {"Subject": "compressed"}, body)
+        assert result == (message_id if verb == "POST" else True)
+        assert (
+            b"".join(server.articles[-1]) == b"Subject: compressed\r\n\r\n" + wire_body
+        )
+        assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    assert len(server.articles) == 2
+    assert client.compressed
+
+
+@pytest.mark.parametrize("verb", ["POST", "IHAVE"])
+@pytest.mark.parametrize("final", [False, True])
+def test_compressed_article_refusal_is_reusable(
+    scripted_server: Start, verb: str, *, final: bool
+) -> None:
+    ready, refused = (340, 441) if verb == "POST" else (335, 437)
+    server = scripted_server(
+        {
+            "COMPRESS DEFLATE": StartCompression(),
+            verb: ReadArticle(
+                f"{ready} send\r\n".encode(), f"{refused} refused\r\n".encode()
+            )
+            if final
+            else b"440 not wanted\r\n",
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client(reader=False, timeout=1)
+    _compress_article_connection(client)
+    args = ("<a@b>",) if verb == "IHAVE" else ()
+    with pytest.raises(nntp.NNTPTemporaryError):
+        getattr(client, verb.lower())(*args, body=b".body\n")
+    assert bool(server.articles) == final
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("verb", ["POST", "IHAVE"])
+@pytest.mark.parametrize("failure", ["header", "body", "source"])
+def test_compressed_article_preflight_sends_nothing(
+    scripted_server: Start, verb: str, failure: str
+) -> None:
+    server = scripted_server(
+        {"COMPRESS DEFLATE": StartCompression(), "DATE": b"111 20260102030405\r\n"}
+    )
+    client = server.client(reader=False)
+    _compress_article_connection(client)
+
+    def source() -> Iterator[bytes]:
+        yield b"valid\n"
+        raise TimeoutError("caller source timed out")
+
+    headers = {"Subject": "bad\r\nheader"} if failure == "header" else None
+    body = source() if failure == "source" else b"valid\nbad\0"
+    expected = {
+        "header": ValueError,
+        "body": nntp.NNTPDataError,
+        "source": TimeoutError,
+    }
+    args = ("<a@b>",) if verb == "IHAVE" else ()
+    with pytest.raises(expected[failure]) as error:
+        getattr(client, verb.lower())(*args, headers=headers, body=body)
+    if failure == "source":
+        assert not isinstance(error.value, nntp.NNTPError)
+    assert server.received == ["COMPRESS DEFLATE"]
+    assert server.articles == []
+    assert client.date() == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("verb", ["POST", "IHAVE"])
+def test_compressed_article_partial_send_timeout_closes(
+    scripted_server: Start, verb: str
+) -> None:
+    ready = 340 if verb == "POST" else 335
+    server = scripted_server(
+        {
+            "COMPRESS DEFLATE": StartCompression(),
+            verb: ReadArticle(f"{ready} send\r\n".encode(), b""),
+        }
+    )
+    client = server.client(reader=False, timeout=1)
+    _compress_article_connection(client)
+    real_socket = client.socket
+    writes = 0
+
+    def send(data: bytes) -> None:
+        nonlocal writes
+        writes += 1
+        if writes == 2:  # First article write, after the compressed command.
+            real_socket.sendall(data[:1])
+            raise TimeoutError("partial compressed article")
+        real_socket.sendall(data)
+
+    fake = mock.Mock(wraps=real_socket)
+    fake.sendall.side_effect = send
+    client.socket = fake
+    args = ("<a@b>",) if verb == "IHAVE" else ()
+    try:
+        with pytest.raises(nntp.NNTPTimeoutError) as error:
+            getattr(client, verb.lower())(*args, body=b".body\n")
+        assert isinstance(error.value.__cause__, TimeoutError)
+        assert real_socket.fileno() == -1
+        assert writes == 2  # No retry of either command or article.
+        with pytest.raises(nntp.NNTPError, match="closed"):
+            client.date()
+    finally:
+        client.socket = real_socket
+
+
+@pytest.mark.parametrize("verb", ["POST", "IHAVE"])
+def test_compressed_article_final_status_timeout_closes(
+    scripted_server: Start, verb: str
+) -> None:
+    ready = 340 if verb == "POST" else 335
+    server = scripted_server(
+        {
+            "COMPRESS DEFLATE": StartCompression(),
+            verb: ReadArticle(f"{ready} send\r\n".encode(), b""),
+        }
+    )
+    client = server.client(reader=False)
+    _compress_article_connection(client)
+    client.socket.settimeout(0.05)
+    args = ("<a@b>",) if verb == "IHAVE" else ()
+    with pytest.raises(nntp.NNTPTimeoutError):
+        getattr(client, verb.lower())(*args, body=b".body\n")
+    # The whole article arrived, but its acknowledgement was lost. Retrying
+    # could duplicate it, so close without issuing any further wire command.
+    assert server.articles == [[b"\r\n", b"..body\r\n"]]
+    assert client.socket.fileno() == -1
+    with pytest.raises(nntp.NNTPError, match="closed"):
+        client.date()
+    assert server.received == [
+        "COMPRESS DEFLATE",
+        "POST" if verb == "POST" else "IHAVE <a@b>",
+    ]
