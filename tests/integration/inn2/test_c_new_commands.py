@@ -2,8 +2,6 @@
 
 from uuid import uuid4
 
-import pytest
-
 import nntp
 from tests.integration.portable import post_and_wait, require
 
@@ -41,7 +39,13 @@ def test_stat_listgroup_and_over() -> None:
             assert by_id[0][0] in (0, last)
             assert by_id[0][1]["Message-ID"] == message_id
         else:
-            with pytest.raises(nntp.NNTPPermanentError) as error:
-                list(client.over(message_id))
-            assert error.value.code == 503  # RFC 3977: Message-ID form is optional.
+            try:
+                by_id = list(client.over(message_id))
+            except nntp.NNTPPermanentError as error:
+                if error.code != 503:  # Message-ID form is optional.
+                    raise
+            else:
+                assert len(by_id) == 1
+                assert by_id[0][0] in (0, last)
+                assert by_id[0][1]["Message-ID"] == message_id
         assert client.date().tzinfo is not None
