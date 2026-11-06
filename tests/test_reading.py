@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 import nntp
+from tests.scripted import Raw, StartCompression
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -25,6 +26,7 @@ DATE_VALUE = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 # Lines as sent on the wire (dot-stuffed) and as the client must return them.
 STUFFED = b"plain\r\n..dot\r\n..\r\n...\r\n.. two\r\nend.\r\n"
 UNSTUFFED = b"plain\r\n.dot\r\n.\r\n..\r\n. two\r\nend.\r\n"
+STUFFED_HELP = b"100 help\r\n" + STUFFED + b".\r\n"
 
 
 def test_body_dot_unstuffing(scripted_server: Start) -> None:
@@ -622,3 +624,72 @@ def test_read_timeout_inside_reply(scripted_server: Start) -> None:
     with pytest.raises(nntp.NNTPTimeoutError):
         client.help()
     assert client.socket.fileno() == -1
+
+
+# COMPRESS DEFLATE transport (A10, RFC 8054)
+
+
+def _compressed(data: bytes) -> bytes:
+    deflate = zlib.compressobj(9, zlib.DEFLATED, -15)
+    return deflate.compress(data) + deflate.flush(zlib.Z_PARTIAL_FLUSH)
+
+
+def _start(client: nntp.NNTPClient) -> None:
+    code, _message = client.command("COMPRESS DEFLATE")
+    assert code == 206
+    client._start_compression()  # noqa: SLF001 (region B's compress() comes in B9)
+
+
+def test_compress_commands_and_replies(scripted_server: Start) -> None:
+    server = scripted_server(
+        {"COMPRESS DEFLATE": StartCompression(), "DATE": DATE, "HELP": STUFFED_HELP}
+    )
+    client = server.client()
+    assert not client.compressed
+    _start(client)
+    assert client.compressed
+    assert client.date() == DATE_VALUE
+    assert client.help() == UNSTUFFED.decode()
+    assert server.received[-2:] == ["DATE", "HELP"]  # decompressed by the server
+
+
+def test_compress_reply_split_over_reads(scripted_server: Start) -> None:
+    """Partial DEFLATE blocks are inflated as they arrive."""
+    reply = [b"100 help\r\n", 0.05, b"one\r\n..two\r\n", 0.05, b".\r\n"]
+    server = scripted_server({"COMPRESS DEFLATE": StartCompression(), "HELP": reply})
+    client = server.client()
+    _start(client)
+    assert client.help() == "one\r\n.two\r\n"
+
+
+def test_compress_tail_in_same_read_as_206(scripted_server: Start) -> None:
+    """Bytes after the 206 line in the same packet are compressed (review: sol)."""
+    tail = _compressed(DATE)
+    server = scripted_server(
+        {"COMPRESS DEFLATE": [Raw(b"206 compression active\r\n" + tail)]}
+    )
+    client = server.client()
+    code, _message = client.command("COMPRESS DEFLATE")
+    assert code == 206
+    client._start_compression()  # noqa: SLF001
+    # the DATE reply was already sent; read it without sending a command
+    assert client.status() == (111, "20260102030405")
+
+
+def test_compress_corrupt_stream_closes(scripted_server: Start) -> None:
+    server = scripted_server(
+        {"COMPRESS DEFLATE": StartCompression(), "DATE": [Raw(b"\xff\xfe garbage")]}
+    )
+    client = server.client()
+    _start(client)
+    with pytest.raises(nntp.NNTPDataError, match="COMPRESS stream corrupt"):
+        client.date()
+    assert client.socket.fileno() == -1
+
+
+def test_compress_twice_refused(scripted_server: Start) -> None:
+    server = scripted_server({"COMPRESS DEFLATE": StartCompression()})
+    client = server.client()
+    _start(client)
+    with pytest.raises(nntp.NNTPError, match="already active"):
+        client._start_compression()  # noqa: SLF001

@@ -1,0 +1,1 @@
+Added: COMPRESS DEFLATE transport (RFC 8054): once switched on, commands are deflated and replies inflated, including bytes read in the same packet as the 206; a corrupt compressed stream closes the connection. The `compressed` property tells whether it is active. The compress() command itself follows separately.

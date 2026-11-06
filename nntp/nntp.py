@@ -209,6 +209,10 @@ class BaseNNTPClient:
     encoding = "utf-8"
     errors = "surrogateescape"
 
+    # COMPRESS DEFLATE (RFC 8054) state; both set by _start_compression()
+    _inflater: zlib._Decompress | None = None
+    _deflater: zlib._Compress | None = None
+
     def __init__(
         self,
         host: str,
@@ -308,7 +312,57 @@ class BaseNNTPClient:
             raise NNTPTimeoutError("Reading from the server timed out") from exc
         if not data:
             raise NNTPError("Failed to read from socket")
+        if self._inflater is not None:
+            try:
+                data = self._inflater.decompress(data)
+            except zlib.error:
+                # nothing on this connection can be read reliably any more
+                with contextlib.suppress(OSError):
+                    self.socket.close()
+                raise NNTPDataError("COMPRESS stream corrupt, connection closed")
         self._buffer.write(data)
+
+    def _sendall(self, data: bytes) -> None:
+        """Send data to the server, compressed while COMPRESS is active.
+
+        Every write to the socket goes through here (interface I5).
+        """
+        if self._deflater is not None:
+            data = self._deflater.compress(data) + self._deflater.flush(
+                zlib.Z_SYNC_FLUSH
+            )
+        self.socket.sendall(data)
+
+    def _start_compression(self) -> None:
+        """Switch the connection to raw DEFLATE in both directions (RFC 8054).
+
+        Call it right after the server's 206 reply to COMPRESS DEFLATE. Bytes
+        already read into the buffer were sent before compression started and
+        stay as they are.
+
+        Raises:
+            NNTPError: If compression is already active.
+        """
+        if self._inflater is not None:
+            raise NNTPError("Compression is already active")
+        self._inflater = zlib.decompressobj(-15)
+        self._deflater = zlib.compressobj(
+            zlib.Z_DEFAULT_COMPRESSION, zlib.DEFLATED, -15
+        )
+        # Anything read past the 206 line already is compressed.
+        pending = self._buffer.read()
+        if pending:
+            try:
+                self._buffer.write(self._inflater.decompress(pending))
+            except zlib.error:
+                with contextlib.suppress(OSError):
+                    self.socket.close()
+                raise NNTPDataError("COMPRESS stream corrupt, connection closed")
+
+    @property
+    def compressed(self) -> bool:
+        """True once COMPRESS DEFLATE is active on this connection."""
+        return self._inflater is not None
 
     def _line(self) -> Iterator[bytes]:
         """Generator that reads a line of data from the server.
@@ -719,7 +773,7 @@ class BaseNNTPClient:
             raise NNTPError("Connection is closed")
         cmd = f"{verb} {args}\r\n" if args else f"{verb}\r\n"
         try:
-            self.socket.sendall(cmd.encode(self.encoding))
+            self._sendall(cmd.encode(self.encoding))
         except TimeoutError as exc:
             # A partial command may have reached the server; don't reuse it.
             with contextlib.suppress(OSError):
