@@ -780,8 +780,10 @@ def test_article_yenc_body_detected(scripted_server: Start) -> None:
     assert client.date() == DATE_VALUE
 
 
-def test_forced_decode_without_ybegin(scripted_server: Start) -> None:
-    client = _body_server(scripted_server, b"222 0 <a@b> body\r\nplain\r\n.\r\n")
+@pytest.mark.parametrize("lines", [b"plain\r\n", b"", b"\r\n"])
+def test_forced_decode_without_ybegin(scripted_server: Start, lines: bytes) -> None:
+    """decode=True needs =ybegin, also for an empty body (terra, R1 verify)."""
+    client = _body_server(scripted_server, b"222 0 <a@b> body\r\n" + lines + b".\r\n")
     with pytest.raises(nntp.NNTPDataError, match="=ybegin"):
         client.body("<a@b>", decode=True)
     assert client.date() == DATE_VALUE

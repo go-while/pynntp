@@ -1664,7 +1664,7 @@ class NNTPClient(BaseNNTPClient):
             body.append(line)
 
         data = b"".join(body)
-        if decode and not begin and data:
+        if decode and not begin:
             raise NNTPDataError("yEnc header (=ybegin) missing")
         _check_yenc(begin, trailer, data, decoder.crc32)
         return data
