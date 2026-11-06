@@ -1,0 +1,3 @@
+Fixed: POST and IHAVE close an uncertain connection when article transmission, spool reading or final-status parsing is interrupted, not only on timeout. Original errors are preserved and no transfer is retried; preflight errors and fully read server refusals retain their existing connection-reuse behavior.
+Fixed: Overview format discovery caches a fallback only after a permanent server error. Temporary, synchronization, timeout and parsing failures propagate without poisoning the cached layout, so a later successful discovery retains extension fields such as Xref.
+Fixed: POST and IHAVE encode headers with the configured error policy, allowing surrogateescaped 8-bit headers read from an article to be relayed unchanged.

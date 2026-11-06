@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import binascii
 import gzip
+import io
+import tempfile
 import zlib
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
@@ -1496,3 +1498,260 @@ def test_compressed_article_final_status_timeout_closes(
         "COMPRESS DEFLATE",
         "POST" if verb == "POST" else "IHAVE <a@b>",
     ]
+
+
+@pytest.mark.parametrize("verb", ["POST", "IHAVE"])
+@pytest.mark.parametrize("phase", ["write", "spool", "status"])
+@pytest.mark.parametrize("fault_type", [OSError, RuntimeError, KeyboardInterrupt])
+@pytest.mark.parametrize("compressed", [False, True])
+def test_article_non_timeout_failure_closes_uncertain_transfer(
+    scripted_server: Start,
+    monkeypatch: pytest.MonkeyPatch,
+    verb: str,
+    phase: str,
+    fault_type: type[BaseException],
+    *,
+    compressed: bool,
+) -> None:
+    ready, accepted = (340, 240) if verb == "POST" else (335, 235)
+    server = scripted_server(
+        {
+            "COMPRESS DEFLATE": StartCompression(),
+            verb: ReadArticle(
+                f"{ready} send\r\n".encode(), f"{accepted} ok\r\n".encode()
+            ),
+        }
+    )
+    client = server.client(reader=False)
+    if compressed:
+        _compress_article_connection(client)
+    fault = fault_type("article transfer interrupted")
+    real_send = client._sendall  # noqa: SLF001 (exercise the C transport hook)
+    real_status = client.status
+
+    if phase == "write":
+
+        def send(data: bytes) -> None:
+            if data.startswith((b"POST\r\n", b"IHAVE ")):
+                real_send(data)
+            else:
+                real_send(data[:5])
+                raise fault
+
+        monkeypatch.setattr(client, "_sendall", send)
+    elif phase == "spool":
+
+        class UnreadableArticle(io.BytesIO):
+            def read(self, size: int | None = -1) -> bytes:  # noqa: ARG002 (fault injection)
+                raise fault
+
+        monkeypatch.setattr(
+            tempfile,
+            "SpooledTemporaryFile",
+            lambda **_kwargs: UnreadableArticle(),
+        )
+    else:
+        status_calls = 0
+
+        def status() -> tuple[int, str]:
+            nonlocal status_calls
+            status_calls += 1
+            if status_calls == 2:
+                raise fault
+            return real_status()
+
+        monkeypatch.setattr(client, "status", status)
+
+    args = ("<a@b>",) if verb == "IHAVE" else ()
+    with pytest.raises(fault_type) as error:
+        getattr(client, verb.lower())(*args, body=b"article\n")
+    assert error.value is fault
+    assert client.socket.fileno() == -1
+    assert server.received == (["COMPRESS DEFLATE"] if compressed else []) + [
+        "POST" if verb == "POST" else "IHAVE <a@b>"
+    ]
+    with pytest.raises(nntp.NNTPError, match="closed"):
+        client.date()
+
+
+@pytest.mark.parametrize("verb", ["POST", "IHAVE"])
+def test_article_write_error_survives_failing_close(
+    scripted_server: Start, monkeypatch: pytest.MonkeyPatch, verb: str
+) -> None:
+    ready = 340 if verb == "POST" else 335
+    server = scripted_server({verb: ReadArticle(f"{ready} send\r\n".encode(), b"")})
+    client = server.client(reader=False)
+    real_send = client._sendall  # noqa: SLF001 (exercise the C transport hook)
+    real_close = client.close
+    fault = OSError("partial article write")
+
+    def send(data: bytes) -> None:
+        if data.startswith((b"POST\r\n", b"IHAVE ")):
+            real_send(data)
+        else:
+            real_send(data[:5])
+            raise fault
+
+    def close() -> None:
+        real_close()
+        raise OSError("close failed too")
+
+    monkeypatch.setattr(client, "_sendall", send)
+    monkeypatch.setattr(client, "close", close)
+    args = ("<a@b>",) if verb == "IHAVE" else ()
+    with pytest.raises(OSError, match="partial article write") as error:
+        getattr(client, verb.lower())(*args, body=b"article\n")
+    assert error.value is fault
+    assert client.socket.fileno() == -1
+
+
+@pytest.mark.parametrize("verb", ["POST", "IHAVE"])
+def test_article_invalid_final_status_closes(scripted_server: Start, verb: str) -> None:
+    ready = 340 if verb == "POST" else 335
+    server = scripted_server(
+        {verb: ReadArticle(f"{ready} send\r\n".encode(), b"not a status\r\n")}
+    )
+    client = server.client(reader=False)
+    args = ("<a@b>",) if verb == "IHAVE" else ()
+    with pytest.raises(nntp.NNTPProtocolError):
+        getattr(client, verb.lower())(*args, body=b"article\n")
+    assert client.socket.fileno() == -1
+
+
+@pytest.mark.parametrize("verb", ["POST", "IHAVE"])
+def test_article_complete_final_refusal_keeps_connection(
+    scripted_server: Start, verb: str
+) -> None:
+    ready = 340 if verb == "POST" else 335
+    server = scripted_server(
+        {
+            verb: ReadArticle(f"{ready} send\r\n".encode(), b"502 refused\r\n"),
+            "DATE": b"111 20260102030405\r\n",
+        }
+    )
+    client = server.client(reader=False)
+    args = ("<a@b>",) if verb == "IHAVE" else ()
+    with pytest.raises(nntp.NNTPPermanentError) as error:
+        getattr(client, verb.lower())(*args, body=b"article\n")
+    assert error.value.code == 502
+    assert client.date().year == 2026
+
+
+def test_overview_discovery_while_reply_held_does_not_poison_cache(
+    scripted_server: Start,
+) -> None:
+    server = scripted_server(
+        {
+            "CAPABILITIES": b"101 caps\r\nVERSION 2\r\n.\r\n",
+            "LIST OVERVIEW.FMT": b"215 fmt\r\nSubject:\r\nXref:full\r\n.\r\n",
+            "OVER": b"224 overview\r\n1\tsubject\tXref: host local.test:1\r\n.\r\n",
+        }
+    )
+    client = server.client(reader=False)
+    pending = client.capabilities()
+    with pytest.raises(nntp.NNTPSyncError):
+        client.over(1)
+    assert "overview_fmt" not in client.__dict__
+    assert "_overview_full_fields" not in client.__dict__
+    assert hasattr(pending, "close")
+    pending.close()
+    number, fields = next(client.over(1))
+    assert number == 1
+    assert fields["Xref"] == "host local.test:1"
+    assert server.received == ["CAPABILITIES", "LIST OVERVIEW.FMT", "OVER 1"]
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        nntp.NNTPSyncError("reply held"),
+        nntp.NNTPTemporaryError(480, "authenticate"),
+        nntp.NNTPTimeoutError("read timed out"),
+        nntp.NNTPDataError("bad overview layout"),
+    ],
+)
+def test_overview_transient_failure_is_uncached(
+    scripted_server: Start, monkeypatch: pytest.MonkeyPatch, fault: nntp.NNTPError
+) -> None:
+    client = scripted_server().client(reader=False)
+    calls = 0
+
+    def layout() -> Iterator[tuple[str, bool]]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise fault
+        return iter([("Subject", False), ("Xref", True)])
+
+    monkeypatch.setattr(client, "list_overview_fmt", layout)
+    with pytest.raises(type(fault)) as error:
+        _ = client.overview_fmt
+    assert error.value is fault
+    assert "overview_fmt" not in client.__dict__
+    assert "_overview_full_fields" not in client.__dict__
+    assert client.overview_fmt == ("Subject", "Xref")
+    assert client.overview_fmt == ("Subject", "Xref")
+    assert calls == 2
+
+
+@pytest.mark.parametrize("code", [500, 501, 503])
+def test_overview_permanent_failure_still_caches_fallback(
+    scripted_server: Start, code: int
+) -> None:
+    server = scripted_server({"LIST OVERVIEW.FMT": f"{code} unsupported\r\n".encode()})
+    client = server.client(reader=False)
+    assert client.overview_fmt == (
+        "Subject",
+        "From",
+        "Date",
+        "Message-ID",
+        "References",
+        "Bytes",
+        "Lines",
+    )
+    assert client.overview_fmt == client.overview_fmt
+    assert server.received == ["LIST OVERVIEW.FMT"]
+
+
+@pytest.mark.parametrize("verb", ["POST", "IHAVE"])
+def test_article_relays_surrogateescaped_headers(
+    scripted_server: Start, verb: str
+) -> None:
+    ready, accepted = (340, 240) if verb == "POST" else (335, 235)
+    server = scripted_server(
+        {
+            "HEAD": (
+                b"221 0 <a@b> head\r\nSubject: Gr\xfc\xdfe\r\n"
+                b"Message-ID: <a@b>\r\n.\r\n"
+            ),
+            "BODY": b"222 0 <a@b> body\r\nbody\r\n.\r\n",
+            verb: ReadArticle(
+                f"{ready} send\r\n".encode(), f"{accepted} ok\r\n".encode()
+            ),
+        }
+    )
+    client = server.client(reader=False)
+    headers = client.head("<a@b>")
+    body = client.body("<a@b>", decode=False)
+    assert "\udcfc" in headers["Subject"]
+    args = ("<a@b>",) if verb == "IHAVE" else ()
+    assert getattr(client, verb.lower())(*args, headers, body) is True
+    assert server.articles == [
+        [b"Subject: Gr\xfc\xdfe\r\n", b"Message-ID: <a@b>\r\n", b"\r\n", b"body\r\n"]
+    ]
+
+
+@pytest.mark.parametrize("errors", ["strict", "replace"])
+def test_article_header_encoding_respects_configured_errors(
+    scripted_server: Start, errors: str
+) -> None:
+    server = scripted_server({"POST": ReadArticle(b"340 send\r\n", b"240 ok\r\n")})
+    client = server.client(reader=False)
+    client.encoding, client.errors = "ascii", errors
+    if errors == "strict":
+        with pytest.raises(UnicodeEncodeError):
+            client.post({"Subject": "caf\u00e9"})
+        assert server.received == []
+    else:
+        assert client.post({"Subject": "caf\u00e9"}) is True
+        assert server.articles == [[b"Subject: caf?\r\n", b"\r\n"]]

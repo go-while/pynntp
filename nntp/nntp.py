@@ -1889,7 +1889,7 @@ class NNTPClient(BaseNNTPClient):
                 name.casefold() for name, full in layout if full
             )
             return tuple(name for name, _full in layout)
-        except NNTPError:
+        except NNTPPermanentError:
             self._overview_full_fields = frozenset()
             return (
                 "Subject",
@@ -2081,19 +2081,29 @@ class NNTPClient(BaseNNTPClient):
     ) -> str:
         """Preflight an entire article, transfer it, and return the final text."""
         with tempfile.SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b") as article:
-            article.write(utils.unparse_headers(headers or {}).encode(self.encoding))
+            article.write(
+                utils.unparse_headers(headers or {}).encode(self.encoding, self.errors)
+            )
             for line in self._post_body(body):
                 article.write(line)
             article.write(b".\r\n")
             article.seek(0)
 
+            awaiting_completion = False
             try:
                 code, message = self.command(verb, args)
                 if code != ready:
                     raise self._unexpected(code, message)
+                awaiting_completion = True
                 while chunk := article.read(65536):
                     self._sendall(chunk)
-                code, message = self.status()
+                try:
+                    code, message = self.status()
+                except NNTPReplyError:
+                    # A fully parsed final refusal ends article mode too.
+                    awaiting_completion = False
+                    raise
+                awaiting_completion = False
             except TimeoutError as exc:
                 # The server may hold a partial article or a delayed status;
                 # neither state permits safely sending another command.
@@ -2102,6 +2112,11 @@ class NNTPClient(BaseNNTPClient):
                 if isinstance(exc, NNTPTimeoutError):
                     raise
                 raise NNTPTimeoutError(f"{verb} article transfer timed out") from exc
+            except BaseException:
+                if awaiting_completion:
+                    with contextlib.suppress(OSError):
+                        self.close()
+                raise
 
         if code != accepted:
             raise self._unexpected(code, message)
@@ -2121,6 +2136,10 @@ class NNTPClient(BaseNNTPClient):
         235 returns True. Responses 435 (not wanted), 436 (retry later) and
         437 (rejected) raise NNTPTemporaryError under the existing 4xx
         exception hierarchy; inspect the code to decide whether to retry.
+
+        An interrupted transfer or an unreadable final status closes the
+        connection. A complete final refusal leaves it usable; preflight
+        failures occur before any article command is sent.
 
         Use a server permitting article transfers, usually with reader=False.
         Supply an already complete article's headers, including Message-ID;
@@ -2186,6 +2205,8 @@ class NNTPClient(BaseNNTPClient):
             (bare carriage returns '\\r' and null characters '\\0') raise
             NNTPDataError without posting a truncated article. Iterable body
             items are treated as lines and consumed before contacting the server.
+            An interrupted transfer or an unreadable final status closes the
+            connection. A complete final refusal leaves it usable.
         """
         message = self._transfer_article(
             "POST", None, headers, body, ready=340, accepted=240
