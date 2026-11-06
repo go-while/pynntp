@@ -336,9 +336,10 @@ class BaseNNTPClient:
     def _start_compression(self) -> None:
         """Switch the connection to raw DEFLATE in both directions (RFC 8054).
 
-        Call it right after the server's 206 reply to COMPRESS DEFLATE. Bytes
-        already read into the buffer were sent before compression started and
-        stay as they are.
+        Call it right after the server's 206 reply to COMPRESS DEFLATE.
+        Compression starts right after the CRLF of that reply (RFC 8054
+        section 2.2.2), so bytes already read past it into the buffer are
+        compressed and are inflated here.
 
         Raises:
             NNTPError: If compression is already active.
