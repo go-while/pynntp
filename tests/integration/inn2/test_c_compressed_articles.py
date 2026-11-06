@@ -1,5 +1,6 @@
 """POST/IHAVE article writes through RFC 8054 compression on disposable INN."""
 
+import re
 from datetime import datetime, timezone
 from email.utils import format_datetime
 from uuid import uuid4
@@ -15,14 +16,22 @@ from tests.integration.portable import (
 )
 
 
+def _inn_version(capabilities: list[str]) -> tuple[int, ...]:
+    """INN's version from CAPABILITIES, or (99,) for other servers."""
+    for line in capabilities:
+        match = re.match(r"IMPLEMENTATION INN (\d+)\.(\d+)\.(\d+)", line)
+        if match:
+            return tuple(int(part) for part in match.groups())
+    return (99,)
+
+
 @pytest.mark.parametrize("verb", ["POST", "IHAVE"])
 def test_compressed_article_round_trip(verb: str) -> None:
     require("COMPRESS")
     require(verb)
     with nntp.NNTPClient("localhost", reader=False) as client:
-        capabilities = list(client.capabilities())
-        if any(line.startswith("IMPLEMENTATION INN 2.6.") for line in capabilities):
-            pytest.skip("nnrpd 2.6 stalls on compressed article input")
+        if _inn_version(list(client.capabilities())) < (2, 7, 2):
+            pytest.skip("nnrpd before INN 2.7.2 hangs on compressed uploads")
         client.compress()
         for _ in range(2):
             message_id = f"<pynntp-compressed-{uuid4().hex}@example.test>"

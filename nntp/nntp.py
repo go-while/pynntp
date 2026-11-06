@@ -854,8 +854,8 @@ class BaseNNTPClient:
         Authenticate and negotiate TLS before calling this method: after
         compression, AUTHINFO, STARTTLS and MODE READER are prohibited.
         Compression can weaken TLS confidentiality for sensitive data.
-        INN 2.6 nnrpd may stall receiving compressed POST or IHAVE articles;
-        avoid compression for article uploads to those servers.
+        nnrpd before INN 2.7.2 hangs on compressed POST or IHAVE articles
+        when TLS is not active; avoid compressed uploads to those servers.
         """
         code, message = self.command("COMPRESS", "DEFLATE")
         if code != 206:
