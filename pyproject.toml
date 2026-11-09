@@ -1,43 +1,54 @@
-[tool.poetry]
+[project]
 name = "pynntp"
-version = "2.0.1"
+version = "3.0.0"
 description = "NNTP Library (including compressed headers)"
-authors = ["Byron Platt <byron.platt@gmail.com>"]
+authors = [{ name = "Byron Platt", email = "byron.platt@gmail.com" }]
 license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
 readme = "README.md"
-packages = [{ include = "nntp" }]
+requires-python = ">=3.11"
 classifiers = [
-    "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
     "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Topic :: Communications :: Usenet News",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
 ]
+keywords = ["nntp", "usenet", "news", "yenc", "client"]
+dependencies = []
 
-[tool.poetry.dependencies]
-python = ">=3.9"
+[project.urls]
+Homepage = "https://github.com/greenbender/pynntp"
+Documentation = "https://greenbender.github.io/pynntp/"
 
-[tool.poetry.group.dev.dependencies]
-mypy = "^1.11.2"
-pre-commit = ">=3.8,<5.0"
-pytest = "^8.3.2"
-pytest-benchmark = ">=4,<6"
-ruff = ">=0.6.9,<0.10.0"
-sphinx-pyproject = "*"
-
-[tool.poetry.group.docs]
-optional = true
-
-[tool.poetry.group.docs.dependencies]
-myst-parser = "*"
-sphinx-autoapi = "*"
-sphinx-pyproject = "*"
-
+[dependency-groups]
+dev = [
+    "mypy>=1.11.2",
+    "pre-commit>=3.8",
+    "pytest>=8.3.2",
+    "ruff>=0.17.4",
+    "sphinx-pyproject",
+]
+docs = ["myst-parser", "sphinx-autoapi", "sphinx-pyproject"]
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["uv_build>=0.13.7,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "nntp"
+module-root = ""
+
 [tool.ruff]
-target-version = "py39"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = [
@@ -103,7 +114,6 @@ select = [
     # "TRY",  # tryceratops
 ]
 ignore = [
-    "B904",    # raise-without-from-inside-except
     "FIX002",  # line-contains-todo
     "ISC001",  # may conflict with ruff format
     "PLW2901", # `for` loop variable overwritten
@@ -114,12 +124,11 @@ max-complexity = 12
 
 [tool.ruff.lint.pylint]
 allow-magic-value-types = ["bytes", "int", "str"]
-max-args = 8                                      # Default: 5
+max-args = 9                                      # Default: 5
 
 [tool.ruff.lint.per-file-ignores]
 "nntp/nntp.py" = ["A002", "ARG002"]
-"nntp/utils.py" = ["N806"]
-"tests/*" = ["S101"]
+"tests/*" = ["S101", "S106", "S311"]
 
 [tool.ruff.lint.flake8-builtins]
 builtins-allowed-modules = ["types"]
@@ -135,11 +144,11 @@ exclude_patterns = [
     ".DS_Store",
     "docs/_build",
     "LICENSE.rst",
+    "README.md",  # Included by index.md
     "Thumbs.db",
 ]
-extensions = ["autoapi.extension", "myst_parser"]
+extensions = ["autoapi.extension", "myst_parser", "sphinx.ext.napoleon"]
 
-html_static_path = ["_static"]
 html_theme = "alabaster"
 
 myst_enable_extensions = [
@@ -166,3 +175,6 @@ templates_path = ["_templates"]
 ".md" = "markdown"
 ".rst" = "restructuredtext"
 ".txt" = "markdown"
+
+[tool.pytest.ini_options]
+xfail_strict = true

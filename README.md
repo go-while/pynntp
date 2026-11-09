@@ -2,64 +2,145 @@
 
 # pynntp
 
-Python NNTP library.
+A Python NNTP client library, built for working with large Usenet servers.
 
-This package includes advanced NNTP features, including, compressed headers.
+- **Streaming responses.** Commands that can return a lot of data (XOVER,
+  HDR, LIST, ...) return iterators, so gigabytes of overview data can be
+  processed as it arrives, with little memory.
+- **Compressed headers.** Supports `XFEATURE COMPRESS GZIP` and the
+  yEnc/zlib compressed XZVER and XZHDR commands, decompressed transparently.
+- **yEnc.** Article bodies are yEnc-decoded and checked against their size
+  and CRC.
+- **TLS and authentication.** Implicit TLS or STARTTLS, and AUTHINFO login
+  sent when the server asks for it.
+- **No dependencies** outside the standard library.
 
-The most important (useful) feature of this package over other nntp libraries is
-the ability to use generators to produce data. This allows for streaming download
-of large responses to say an XOVER command (which can produce gigabytes of data)
-and allows you to process the data at the same time is is being received.
-Meaning that memory use is minimal (even for the largest responses) and that
-cycles aren't being wasted waiting on a blocking read (even in a single threaded
-application)
+Documentation, including the API reference:
+<https://greenbender.github.io/pynntp/>
 
-## Documentation
+## Installation
 
-https://greenbender.github.io/pynntp/
+```sh
+pip install pynntp
+```
 
-This is an area in need of improvement. At present docs are simply auto
-generated via docstrings. Some more explicit documentation, including examples,
-is on the TODO list.
+or `uv add pynntp`. Requires Python 3.11 or newer. The package is imported
+as `nntp`.
 
-## Example
+## Quickstart
 
-    >>> import nntp
-    >>> nntp_client = nntp.NNTPClient('usenet-host.com', 443, 'user', 'password', use_ssl=True)
-    >>> nntp_client.date()
-    datetime.datetime(2013, 10, 19, 6, 11, 41, tzinfo=_tzgmt())
-    >>> nntp_client.xfeature_compress_gzip()
-    True
-    >>> nntp_client.date()
-    datetime.datetime(2013, 10, 19, 6, 13, 3, tzinfo=_tzgmt())
+### Connecting
 
-## Supported Commands
+```python
+import nntp
 
-NNTP commands that are currently supported include:
+with nntp.NNTPClient(
+    "news.example.com", username="user", password="secret", use_ssl=True
+) as client:
+    print(client.date())
+```
 
-- CAPABILITIES
-- MODE READER
-- QUIT
-- DATE
-- HELP
-- NEWGROUPS
-- NEWNEWS
-- LIST ACTIVE
-- LIST ACTIVE.TIMES
-- LIST NEWSGROUPS
-- LIST OVERVIEW.FMT
-- LIST EXTENSIONS
-- GROUP
-- NEXT
-- LAST
-- ARTICLE
-- HEAD
-- BODY
-- POST
-- XHDR
-- XZHDR
-- XOVER
-- XZVER
-- XPAT
-- XFEATURE COMPRESS GZIP
-- POST
+The username and password are only sent if the server asks for them, and in
+clear text unless TLS is used. With `use_ssl=True` the port defaults to 563;
+for STARTTLS on port 119 instead, also pass `ssl_mode=nntp.SSLMode.STARTTLS`.
+TLS certificates are verified;
+pass `ssl_context=` (an `ssl.SSLContext`) to trust a private CA or change other
+TLS settings. Leaving the `with` block sends QUIT.
+
+Or connect from a URL, such as one held in an environment variable. The schemes
+are `nntp://`, `nntps://` (or `snews://`) and `nntp+starttls://`:
+
+```python
+client = nntp.NNTPClient.from_url("nntps://user@news.example.com", password=secret)
+```
+
+The username and password come from the URL's user info, and the query can set
+`timeout` (seconds, or `none`) and `reader` (`true`/`false`), for example
+`?timeout=10&reader=false`. Keyword arguments override the URL. Passing the
+password as an argument keeps it out of the URL, which tends to end up in logs.
+
+### Browsing a group
+
+```python
+total, first, last, name = client.group("alt.binaries.test")
+
+for number, overview in client.xover((last - 999, last)):
+    print(number, overview["subject"], overview["bytes"])
+```
+
+Header and overview names are case-insensitive: `overview["Subject"]` and
+`overview["subject"]` are the same.
+
+To compress the whole connection on servers that support RFC 8054, call
+`client.compress()` after connecting and any login. Some servers instead
+offer compressed overview data: call `client.xfeature_compress_gzip()` once,
+or use `client.xzver()` instead of `xover()`.
+
+### Downloading an article
+
+```python
+headers = client.head("<part1of10.abc@example.com>")
+data = client.body("<part1of10.abc@example.com>")  # yEnc is decoded
+```
+
+A body whose yEnc data fails its size or CRC check raises `NNTPYEncError`.
+The decoded data is still available, for example for par2 repair:
+
+```python
+try:
+    data = client.body(message_id)
+except nntp.NNTPYEncError as e:
+    data = e.data
+```
+
+### Posting
+
+```python
+message_id = client.post(
+    {"From": "me@example.com", "Newsgroups": "alt.test", "Subject": "Hello"},
+    "Hello, world!\n",
+)
+```
+
+`post()` returns the new article's message-id if the server reports it,
+otherwise `True`.
+
+### Errors and reconnecting
+
+All errors derive from `nntp.NNTPError`:
+
+- `NNTPReplyError`: an unexpected reply, with `code` and `message`.
+  `NNTPTemporaryError` (4xx) and `NNTPPermanentError` (5xx) are subclasses.
+- `NNTPDataError`: a response that can't be parsed, such as a bad overview
+  line. `NNTPYEncError` is a subclass.
+- `NNTPSyncError`: the connection can't be used, see below.
+
+A streamed response must be read to the end before the next command. If one
+is abandoned part way (a `break`, or `next()` to take only the first match)
+or fails part way, the connection is left out of sync and the next command
+raises `NNTPSyncError`. Use `list()` to read a response before searching it.
+Call `reconnect()` to recover; it does not restore the selected group.
+
+```python
+for number, overview in client.xover((first, last)):
+    if number > 1000:
+        break  # The rest of the response is never read
+
+client.reconnect()
+client.group("alt.binaries.test")
+```
+
+## Supported commands
+
+CAPABILITIES, MODE READER, QUIT, DATE, HELP, NEWGROUPS, NEWNEWS, LIST
+(ACTIVE, ACTIVE.TIMES, NEWSGROUPS, OVERVIEW.FMT, HEADERS, EXTENSIONS), GROUP,
+LISTGROUP, NEXT, LAST, STAT, ARTICLE, HEAD, BODY, POST, IHAVE, HDR, XHDR,
+XZHDR, OVER, XOVER, XZVER, XPAT, COMPRESS DEFLATE and XFEATURE COMPRESS
+GZIP.
+
+Other commands can be sent with `client.command()`; read a multi-line
+response with `client.info()`.
+
+## License
+
+GPL-3.0-or-later.

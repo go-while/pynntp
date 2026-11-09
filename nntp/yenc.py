@@ -1,5 +1,5 @@
 """
-Basic yEnc decoder.
+yEnc decoding and trailer checks.
 Copyright (C) 2013-2020  Byron Platt
 
 This program is free software: you can redistribute it and/or modify
@@ -18,50 +18,110 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 from __future__ import annotations
 
-import binascii
 import re
-import struct
 import zlib
 
-__all__ = ["YEnc", "trailer_crc32"]
+__all__ = ["YEnc", "check_trailer", "parse_keywords", "trailer_crc32"]
 
 
-_crc32_re = re.compile(b"\\s+crc(?:32)?=([0-9a-fA-F]{8})")
+_KEYWORD_RE = re.compile(rb"(\w+)=(\S*)")
+# Some encoders drop leading zeros, so accept 1-8 hex digits.
+_CRC32_RE = re.compile(r"[0-9a-fA-F]{1,8}")
+
+# "=" escapes the following byte, whatever it is (including "=", CR, LF).
+_ESCAPE_RE = re.compile(b"=(.)", re.DOTALL)
+_PLAIN_TABLE = bytes((b - 42) & 0xFF for b in range(256))
+_ESCAPED_TABLE = bytes((b - 106) & 0xFF for b in range(256))
 
 
-def trailer_crc32(trailer: bytes) -> int | None:
-    """Extract the CRC32 value from a yEnc trailer."""
-    match = _crc32_re.search(trailer)
-    if not match:
+def parse_keywords(line: bytes) -> dict[str, str]:
+    """Parse the keyword=value pairs of a =ybegin, =ypart or =yend line.
+
+    The name keyword (on =ybegin) runs to the end of the line and may contain
+    spaces and "=", so it and anything after it is left out.
+    """
+    line = line.split(b" name=", 1)[0]
+    return {
+        key.decode("ascii"): value.decode("ascii", "replace")
+        for key, value in _KEYWORD_RE.findall(line)
+    }
+
+
+def trailer_crc32(trailer: bytes, *, part: bool = False) -> int | None:
+    """Extract the CRC32 value from a yEnc trailer.
+
+    Args:
+        trailer: The =yend line.
+        part: Return the CRC of this part (pcrc32) rather than of the whole
+            file (crc32), for multipart posts.
+    """
+    keywords = parse_keywords(trailer)
+    if part:
+        value = keywords.get("pcrc32")
+    else:
+        value = keywords.get("crc32", keywords.get("crc"))
+    if value is None or not _CRC32_RE.fullmatch(value):
         return None
-    buf = binascii.unhexlify(match.group(1))
-    return struct.unpack(">I", buf)[0]  # type: ignore[no-any-return]
+    return int(value, 16)
+
+
+def check_trailer(trailer: bytes, size: int, crc32: int, *, part: bool) -> str | None:
+    """Check decoded data against a =yend trailer.
+
+    Args:
+        trailer: The =yend line.
+        size: Length of the decoded data.
+        crc32: CRC32 of the decoded data.
+        part: The data is one part of a multipart post, so it is checked
+            against pcrc32 rather than the whole-file crc32.
+
+    Returns:
+        A description of the first mismatch, or None if the data matches. A
+        size or CRC missing from the trailer is not checked.
+    """
+    keywords = parse_keywords(trailer)
+    expected_size = keywords.get("size", "")
+    if expected_size.isdigit() and int(expected_size) != size:
+        return f"decoded {size} bytes, trailer says {expected_size}"
+    expected_crc = trailer_crc32(trailer, part=part or "part" in keywords)
+    if expected_crc is not None and expected_crc != crc32:
+        return f"CRC32 is {crc32:08x}, trailer says {expected_crc:08x}"
+    return None
 
 
 class YEnc:
-    """A basic yEnc decoder.
-
-    Keeps track of the CRC32 value as data is decoded.
-    """
+    """A yEnc decoder that keeps a running CRC32 of the decoded data."""
 
     def __init__(self) -> None:
         self.crc32 = 0
-        self._escape = 0
+        self._escape = False
 
     def decode(self, buf: bytes) -> bytes:
-        data = bytearray()
-        for b in buf:
-            if self._escape:
-                b = (b - 106) & 0xFF
-                self._escape = 0
-            elif b == 0x3D:
-                self._escape = 1
-                continue
-            elif b in {0x0D, 0x0A}:
-                continue
-            else:
-                b = (b - 42) & 0xFF
-            data.append(b)
-        decoded = bytes(data)
+        """Decode a chunk of yEnc data and update crc32.
+
+        CR and LF are removed. An escape split across calls (a chunk ending in
+        "=") is completed by the next call.
+
+        Args:
+            buf: yEnc data, without the =ybegin, =ypart and =yend lines.
+
+        Returns:
+            The decoded bytes.
+        """
+        if self._escape:
+            buf = b"=" + buf
+            self._escape = False
+
+        # Alternating [plain, escaped, plain, ..., plain] segments. A plain
+        # segment can only contain "=" as its final byte, in the last segment,
+        # when the escaped byte is in the next buffer.
+        parts = _ESCAPE_RE.split(buf)
+        if parts[-1].endswith(b"="):
+            parts[-1] = parts[-1][:-1]
+            self._escape = True
+        parts[::2] = [p.translate(_PLAIN_TABLE, b"\r\n") for p in parts[::2]]
+        parts[1::2] = [p.translate(_ESCAPED_TABLE) for p in parts[1::2]]
+
+        decoded = b"".join(parts)
         self.crc32 = zlib.crc32(decoded, self.crc32)
         return decoded
