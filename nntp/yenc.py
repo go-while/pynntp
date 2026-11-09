@@ -76,16 +76,43 @@ def check_trailer(trailer: bytes, size: int, crc32: int, *, part: bool) -> str |
             against pcrc32 rather than the whole-file crc32.
 
     Returns:
-        A description of the first mismatch, or None if the data matches. A
-        size or CRC missing from the trailer is not checked.
+        A description of the first problem, or None if the data matches. The
+        size is required (yEnc 1.3). A missing CRC is not checked, but a
+        malformed size, part or CRC is a problem.
     """
     keywords = parse_keywords(trailer)
-    expected_size = keywords.get("size", "")
-    if expected_size.isdigit() and int(expected_size) != size:
-        return f"decoded {size} bytes, trailer says {expected_size}"
-    expected_crc = trailer_crc32(trailer, part=part or "part" in keywords)
-    if expected_crc is not None and expected_crc != crc32:
-        return f"CRC32 is {crc32:08x}, trailer says {expected_crc:08x}"
+    return _size_problem(keywords, size) or _crc_problem(keywords, crc32, part=part)
+
+
+def _is_number(value: str) -> bool:
+    return value.isascii() and value.isdigit()
+
+
+def _size_problem(keywords: dict[str, str], size: int) -> str | None:
+    expected = keywords.get("size")
+    if expected is None:
+        return "trailer has no size"
+    if not _is_number(expected):
+        return f"invalid size {expected!r} in trailer"
+    if int(expected) != size:
+        return f"decoded {size} bytes, trailer says {expected}"
+    return None
+
+
+def _crc_problem(keywords: dict[str, str], crc32: int, *, part: bool) -> str | None:
+    number = keywords.get("part")
+    if number is not None and not _is_number(number):
+        return f"invalid part {number!r} in trailer"
+    if part or number is not None:
+        value = keywords.get("pcrc32")
+    else:
+        value = keywords.get("crc32", keywords.get("crc"))
+    if value is None:
+        return None
+    if not _CRC32_RE.fullmatch(value):
+        return f"invalid CRC {value!r} in trailer"
+    if int(value, 16) != crc32:
+        return f"CRC32 is {crc32:08x}, trailer says {int(value, 16):08x}"
     return None
 
 

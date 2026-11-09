@@ -122,9 +122,11 @@ def test_body_detection_leading_blank_lines(connect: Connect) -> None:
 def test_body_decode_forced(connect: Connect) -> None:
     raw = yenc_encode(b"raw bytes")  # No =ybegin/=yend lines at all
     server = b"222 1 <a@b>\r\n" + raw + b".\r\n" + b"222 2 <b@c>\r\n=ybegin x\r\n.\r\n"
-    client, _ = connect(WELCOME + MODE_READER + server)
-    assert client.body(1, decode=True) == b"raw bytes"
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    with pytest.raises(nntp.NNTPYEncError, match="missing =ybegin"):
+        client.body(1, decode=True)  # Not yEnc: an error, not garbage
     assert client.body(2, decode=False) == b"=ybegin x\r\n"
+    assert client.date().year == 2024
 
 
 def test_body_two_yenc_blocks(connect: Connect) -> None:
@@ -148,3 +150,61 @@ def test_article_yenc_subject_plain_body(connect: Connect) -> None:
     article = b"220 1 <a@b>\r\nSubject: file yEnc (1/1)\r\n\r\nplain text\r\n.\r\n"
     client, _ = connect(WELCOME + MODE_READER + article)
     assert client.article(1)[2] == b"plain text\r\n"  # Detected from the body only
+
+
+def test_article_yenc_detected_from_body(connect: Connect) -> None:
+    yenc = yenc_body(PLAIN).split(b"\r\n", 1)[1]  # Without the 222 line
+    client, _ = connect(
+        WELCOME + MODE_READER + b"220 5 <a@b>\r\nSubject: file\r\n\r\n" + yenc
+    )
+    assert client.article(5)[2] == PLAIN
+
+
+@pytest.mark.parametrize("first", [b"=ybeginners guide", b"=yes", b"=ybegin"])
+def test_body_plain_line_like_yenc(connect: Connect, first: bytes) -> None:
+    """Only a =ybegin line with keywords starts yEnc detection."""
+    body = first + b"\r\ntext\r\n"
+    client, _ = connect(WELCOME + MODE_READER + b"222 1 <a@b>\r\n" + body + b".\r\n")
+    assert client.body(1) == body
+
+
+def test_yenc_text_after_trailer_left_out(connect: Connect) -> None:
+    """A signature after =yend is not decoded into the data."""
+    server = (
+        yenc_body(PLAIN)[: -len(b".\r\n")] + b"-- \r\n=you know\r\nsignature\r\n.\r\n"
+    )
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    assert client.body(1) == PLAIN
+    assert client.date().year == 2024
+
+
+def test_yenc_text_between_blocks_left_out(connect: Connect) -> None:
+    first, second = yenc_body(b"first"), yenc_body(b"second")
+    server = (
+        first[: -len(b".\r\n")]
+        + b"some text\r\n"
+        + second.split(b"\r\n", 1)[1]  # Without its 222 line
+    )
+    client, _ = connect(WELCOME + MODE_READER + server)
+    assert client.body(1) == b"firstsecond"
+
+
+@pytest.mark.parametrize(
+    ("trailer", "match"),
+    [
+        ("crc32={crc:08x}", "no size"),
+        ("size={size}garbage crc32={crc:08x}", "invalid size"),
+        ("size=ab crc32={crc:08x}", "invalid size"),
+        ("size={size} crc32=0garbage", "invalid CRC"),
+        ("size={size} crc32=123456789", "invalid CRC"),
+        ("size={size} part=x pcrc32={crc:08x}", "invalid part"),
+    ],
+)
+def test_yenc_malformed_trailer(connect: Connect, trailer: str, match: str) -> None:
+    """A malformed trailer is an error, not a check that is skipped."""
+    trailer = trailer.format(size=len(PLAIN), crc=zlib.crc32(PLAIN))
+    server = yenc_body(PLAIN, trailer=trailer) + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPYEncError, match=match):
+        client.body(1)
+    assert client.date().year == 2024

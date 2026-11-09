@@ -63,6 +63,9 @@ __all__ = [
 
 # RFC 3977 section 3.6: "<", 1-248 printable US-ASCII characters except ">",
 # then ">"
+# A yEnc header line: "=ybegin" and its keywords (yEnc 1.3)
+_YBEGIN = b"=ybegin "
+
 _MESSAGE_ID_RE = re.compile(r"<[!-=?-~]{1,248}>")
 
 # URL scheme -> (use_ssl, ssl_mode) for NNTPClient.from_url()
@@ -1223,8 +1226,8 @@ class NNTPClient(BaseNNTPClient):
     def _read_body(self, lines: Iterator[bytes], decode: bool | None = None) -> bytes:
         """Read an article body, decoding yEnc if decode is set or detected.
 
-        Detection: the body is yEnc if its first non-blank line starts with
-        "=y". Every path reads the response to its end.
+        Detection: the body is yEnc if its first non-blank line is a =ybegin
+        line. Every path reads the response to its end.
 
         Raises:
             NNTPYEncError: As for _decode_yenc().
@@ -1233,7 +1236,7 @@ class NNTPClient(BaseNNTPClient):
             return self._decode_yenc(lines) if decode else b"".join(lines)
         blank: list[bytes] = []
         for line in lines:
-            if line.startswith(b"=y"):
+            if line.startswith(_YBEGIN):
                 # Leading blank lines are not part of the yEnc data
                 return self._decode_yenc(itertools.chain([line], lines))
             if line != b"\r\n":
@@ -1245,17 +1248,21 @@ class NNTPClient(BaseNNTPClient):
         """Decode yEnc lines, checking each block against its =yend trailer.
 
         The size is checked, and pcrc32 for a part of a multipart post or
-        crc32 otherwise. The whole response is read before a mismatch is
-        raised, so the connection stays in sync.
+        crc32 otherwise. Lines outside a =ybegin ... =yend block, such as a
+        signature after the trailer, are not yEnc data and are left out. The
+        whole response is read before an error is raised, so the connection
+        stays in sync.
 
         Raises:
-            NNTPYEncError: If yEnc data does not match its trailer, or a =ybegin
-                has no =yend. The decoded body is in its data attribute.
+            NNTPYEncError: If yEnc data does not match its trailer, a =ybegin
+                has no =yend, or there is no =ybegin at all. The decoded body
+                is in its data attribute.
         """
         body: list[bytes] = []
         encoded: list[bytes] = []  # yEnc data lines not yet decoded
         decoder, size, multipart, open_block = YEnc(), 0, False, False
         error: str | None = None
+        begun = False
 
         def decode_pending() -> None:
             # Decoding a block in one call is much faster than line by line
@@ -1268,12 +1275,15 @@ class NNTPClient(BaseNNTPClient):
 
         for line in lines:
             if line[:2] != b"=y":
-                encoded.append(line)
+                if open_block:
+                    encoded.append(line)
                 continue
             decode_pending()
-            if line.startswith(b"=ybegin"):
-                decoder, size, open_block = YEnc(), 0, True
+            if line.startswith(_YBEGIN):
+                decoder, size, open_block, begun = YEnc(), 0, True, True
                 multipart = "part" in parse_keywords(line)
+            elif not open_block:
+                pass  # Not inside a block: text, not yEnc
             elif line.startswith(b"=yend"):
                 mismatch = check_trailer(line, size, decoder.crc32, part=multipart)
                 error = error or mismatch
@@ -1283,6 +1293,8 @@ class NNTPClient(BaseNNTPClient):
         decode_pending()
         if open_block:
             error = error or "missing =yend trailer"
+        if not begun:
+            error = "missing =ybegin header"
         data = b"".join(body)
         if error:
             raise NNTPYEncError(f"Bad yEnc data: {error}", data)
