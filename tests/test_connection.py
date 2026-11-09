@@ -308,6 +308,57 @@ def test_unexpected_reply_raises(
     assert client.date().year == 2024  # The status line was read; in sync
 
 
+@pytest.mark.parametrize(
+    ("reply", "call"),
+    [
+        (b"222 1 <a@b>\r\nbody\r\n.\r\n", lambda c: c.head(1)),
+        (b"220 1 <a@b>\r\nSubject: x\r\n\r\nbody\r\n.\r\n", lambda c: c.body(1)),
+        (b"221 1 <a@b>\r\nSubject: x\r\n.\r\n", lambda c: c.article(1)),
+        (b"215 list\r\nalt.a 2 1 y\r\n.\r\n", lambda c: c.date()),
+        (b"224 ok\r\n1\tx\r\n.\r\n", lambda c: c.group("g")),
+        (b"100 help\r\nHELP\r\n.\r\n", lambda c: c.post({"Subject": "x"}, b"x\n")),
+    ],
+)
+def test_unexpected_multiline_reply_is_read(
+    connect: Connect, reply: bytes, call: Callable[[nntp.NNTPClient], object]
+) -> None:
+    """An unexpected multi-line reply is read to its end before raising."""
+    client, _ = connect(WELCOME + MODE_READER + reply + DATE)
+    with pytest.raises(nntp.NNTPReplyError):
+        call(client)
+    assert client.date().year == 2024  # The data block was not taken as a reply
+
+
+def test_unexpected_multiline_reply_line_like_status(connect: Connect) -> None:
+    """A leftover data line that looks like a status line is not read as one."""
+    client, _ = connect(
+        WELCOME + MODE_READER + b"222 1 <a@b>\r\n111 19990101000000\r\n.\r\n" + DATE
+    )
+    with pytest.raises(nntp.NNTPReplyError):
+        client.head(1)
+    assert client.date().year == 2024
+
+
+def test_unexpected_multiline_reply_cut_short(connect: Connect) -> None:
+    """If the data block can't be read, the connection is marked out of sync."""
+    client, _ = connect(WELCOME + MODE_READER + b"222 1 <a@b>\r\nbody\r\n")
+    with pytest.raises(nntp.NNTPReplyError) as info:
+        client.head(1)
+    assert info.value.code == 222
+    with pytest.raises(NNTPSyncError):
+        client.date()
+
+
+def test_unexpected_211_marks_out_of_sync(connect: Connect) -> None:
+    """211 is multi-line only for LISTGROUP, so after an unexpected one the
+    rest of the reply is unknown."""
+    client, _ = connect(WELCOME + MODE_READER + b"211 2 1 2 g\r\n" + DATE)
+    with pytest.raises(nntp.NNTPReplyError):
+        client.date()
+    with pytest.raises(NNTPSyncError):
+        client.date()
+
+
 def test_exit_when_quit_fails_closes_and_raises(connect: Connect) -> None:
     client, sock = connect(WELCOME + MODE_READER + b"400 cannot quit\r\n")
     with pytest.raises(nntp.NNTPTemporaryError), client:

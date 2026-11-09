@@ -73,6 +73,10 @@ _URL_SCHEMES = {
     "nntp+starttls": (True, SSLMode.STARTTLS),
 }
 _URL_QUERY = ("timeout", "reader")
+
+# Success codes always followed by a multi-line data block (RFC 3977 3.4.1).
+# 211 is left out: it is multi-line only in reply to LISTGROUP.
+_MULTILINE = frozenset((100, 101, 215, 220, 221, 222, 224, 225, 230, 231))
 _URL_TRUE = ("1", "true", "yes", "on")
 _URL_FALSE = ("0", "false", "no", "off")
 
@@ -569,7 +573,8 @@ class BaseNNTPClient:
             NNTPSyncError: If a response is still being read, or the connection
                 is closed or out of sync.
             NNTPReplyError: If authentication fails, or the reply is not one
-                of expect.
+                of expect. The data of an unexpected multi-line reply is read
+                and dropped first, so the connection stays in sync.
             NNTPTemporaryError: For status codes 400-499.
             NNTPPermanentError: For status codes 500-599.
             NNTPProtocolError: If the status line can't be parsed.
@@ -578,8 +583,26 @@ class BaseNNTPClient:
         if expect is not None:
             codes = (expect,) if isinstance(expect, int) else tuple(expect)
             if code not in codes:
+                self._discard(code, message)
                 raise NNTPReplyError(code, message)
         return code, message
+
+    def _discard(self, code: int, message: str) -> None:
+        """Keep the connection in sync after a reply that won't be read.
+
+        The data block of a multi-line reply is read and dropped. After 211,
+        which may or may not have one, the connection is marked out of sync.
+        If reading fails, the connection is marked out of sync and the error
+        is not raised, so the caller's own error is the one reported.
+        """
+        if code in _MULTILINE:
+            try:
+                for _ in self._info(code, message):
+                    pass
+            except (NNTPError, OSError):
+                pass  # _response() marked the connection broken
+        elif code == 211:
+            self._broken = True
 
     def _command(self, verb: str, args: str | None) -> tuple[int, str]:
         if self._reading:
@@ -1701,6 +1724,7 @@ class NNTPClient(BaseNNTPClient):
                 code, message = self.status()
 
         if code != done:
+            self._discard(code, message)
             raise NNTPReplyError(code, message)
         return message
 

@@ -11,7 +11,7 @@ from nntp.nntp import NNTPSyncError
 from tests.helpers import DATE, IHAVE_OK, MODE_READER, ODD, WELCOME, Connect
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
 
 def test_post(connect: Connect) -> None:
@@ -161,4 +161,22 @@ def test_post_unexpected_final_reply(connect: Connect) -> None:
     with pytest.raises(nntp.NNTPReplyError) as info:
         client.post({"Subject": "x"}, b"x\n")
     assert info.value.code == 299
+    assert client.date().year == 2024
+
+
+@pytest.mark.parametrize(
+    ("ready", "call"),
+    [
+        (b"340 send\r\n", lambda c: c.post({"Subject": "x"}, b"x\n")),
+        (b"335 send\r\n", lambda c: c.ihave("<a@b>", {"Subject": "x"}, b"x\n")),
+    ],
+)
+def test_unexpected_multiline_final_reply_is_read(
+    connect: Connect, ready: bytes, call: Callable[[nntp.NNTPClient], object]
+) -> None:
+    """An unexpected multi-line final reply is read before raising."""
+    final = b"222 1 <a@b>\r\n111 19990101000000\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + ready + final + DATE)
+    with pytest.raises(nntp.NNTPReplyError):
+        call(client)
     assert client.date().year == 2024
