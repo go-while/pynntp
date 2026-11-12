@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gzip
+import zlib
 
 import pytest
 
@@ -16,6 +17,7 @@ from tests.helpers import (
     XOVER_LINES,
     Connect,
     check_xover,
+    dot_stuff,
     xzver_server,
     yenc_encode,
     yenczlib,
@@ -31,25 +33,42 @@ def test_xover_plain(connect: Connect) -> None:
 
 @pytest.mark.parametrize("terminator", [False, True])
 def test_xover_gzip(connect: Connect, terminator: bool) -> None:
+    # The gzip trailer can arrive after the decompressed terminator
     if terminator:
         payload = gzip.compress(XOVER_LINES + b".\r\n")
     else:
         payload = gzip.compress(XOVER_LINES) + b".\r\n"
-    client, _ = connect(
-        WELCOME + MODE_READER + OVERVIEW_FMT + b"224 ok COMPRESS=GZIP\r\n" + payload
-    )
+    server = OVERVIEW_FMT + b"224 ok COMPRESS=GZIP\r\n" + payload + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
     check_xover(list(client.xover((1, 2))))
+    assert client.date().year == 2024
+
+
+def test_xover_gzip_bad_trailer_after_terminator(connect: Connect) -> None:
+    payload = bytearray(gzip.compress(XOVER_LINES + b".\r\n"))
+    payload[-8] ^= 0xFF  # Corrupt the gzip CRC, which follows the terminator
+    server = OVERVIEW_FMT + b"224 ok COMPRESS=GZIP\r\n" + bytes(payload)
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPDataError, match="Decompression failed"):
+        list(client.xover((1, 2)))
+
+
+def test_xzver_truncated_stream(connect: Connect) -> None:
+    deflate = zlib.compressobj(wbits=-15)
+    raw = (deflate.compress(XOVER_LINES) + deflate.flush())[:-6]
+    server = (
+        b"224 ok\r\n=ybegin line=128 size=0 name=x\r\n"
+        + dot_stuff(yenc_encode(raw, 128))
+        + f"=yend size={len(raw)} crc32={zlib.crc32(raw):08x}\r\n.\r\n".encode()
+    )
+    client, _ = connect(WELCOME + MODE_READER + OVERVIEW_FMT + server)
+    with pytest.raises(nntp.NNTPDataError, match="truncated"):
+        list(client.xzver((1, 2)))
 
 
 def test_xzver(connect: Connect) -> None:
     client, _ = connect(WELCOME + MODE_READER + OVERVIEW_FMT + xzver_server())
     check_xover(list(client.xzver((1, 2))))
-
-
-def test_xzver_bad_crc(connect: Connect) -> None:
-    client, _ = connect(WELCOME + MODE_READER + OVERVIEW_FMT + xzver_server(crc=1))
-    with pytest.raises(nntp.NNTPDataError, match="CRC"):
-        list(client.xzver((1, 2)))
 
 
 def test_xover_full_field_and_empty_trailing(connect: Connect) -> None:
@@ -99,6 +118,7 @@ def test_xzhdr(connect: Connect) -> None:
     ("server", "match"),
     [
         (b"224 ok\r\nnot a ybegin line\r\n.\r\n", "Bad yEnc header"),
+        (xzver_server(crc=1), "CRC"),
         (b"224 ok\r\n=ybegin line=128 size=0 name=x\r\n.\r\n", "Missing yEnc trailer"),
         (yenczlib(b"224", XOVER_LINES, trailer="=yend size=1"), "trailer says 1"),
         (
@@ -140,3 +160,11 @@ def test_xzhdr_empty_response(connect: Connect) -> None:
     client, _ = connect(WELCOME + MODE_READER + b"221 none\r\n.\r\n" + DATE)
     assert list(client.xzhdr("Subject", (1, 2))) == []
     assert client.date().year == 2024
+
+
+def test_overview_fmt_temporary_error_not_cached(connect: Connect) -> None:
+    server = b"400 busy\r\n" + OVERVIEW_FMT + b"224 ok\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPTemporaryError):
+        list(client.xover())
+    assert list(client.xover()) == []  # Retried, not cached as the default

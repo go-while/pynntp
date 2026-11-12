@@ -13,7 +13,7 @@ from nntp.types import Newsgroup, SSLMode
 from tests.helpers import LIST, MODE_READER, WELCOME, Connect
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
 
 def test_group(connect: Connect) -> None:
@@ -78,6 +78,22 @@ def test_hdr_bad_line(connect: Connect) -> None:
     client, _ = connect(WELCOME + MODE_READER + b"225 ok\r\nx y\r\n.\r\n")
     with pytest.raises(nntp.NNTPDataError, match="Invalid HDR response"):
         list(client.hdr("Subject"))
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [b"111 20240102030405\r\n", b"111 20240102030405 server time\r\n"],
+)
+def test_date_ignores_text_after_the_date(connect: Connect, reply: bytes) -> None:
+    client, _ = connect(WELCOME + MODE_READER + reply)
+    assert client.date() == datetime(2024, 1, 2, 3, 4, 5, tzinfo=UTC)
+
+
+@pytest.mark.parametrize("reply", [b"111\r\n", b"111 2024010203040 5\r\n"])
+def test_date_without_a_date_raises_data_error(connect: Connect, reply: bytes) -> None:
+    client, _ = connect(WELCOME + MODE_READER + reply)
+    with pytest.raises(nntp.NNTPDataError, match="Invalid DATE response"):
+        client.date()
 
 
 def test_sync_error_is_exported() -> None:
@@ -268,3 +284,62 @@ def test_list_newsgroups_without_description(connect: Connect) -> None:
         ("alt.test", "A test group"),
         ("alt.bare", ""),
     ]
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [b"223 -5 <a@b>", b"223 +5 <a@b>", b"223 3", b"223 3 nothing", b"223 3 <>"],
+)
+def test_stat_invalid_metadata(connect: Connect, reply: bytes) -> None:
+    client, _ = connect(WELCOME + MODE_READER + reply + b"\r\n")
+    with pytest.raises(nntp.NNTPDataError, match="Invalid STAT status"):
+        client.stat(1)
+
+
+def test_stat_message_id_without_at(connect: Connect) -> None:
+    # RFC 3977 doesn't require "@"; INN serves such ids with laxmid
+    client, _ = connect(WELCOME + MODE_READER + b"223 3 <bnews.sri-arpa.865>\r\n")
+    assert client.stat(3) == (3, "<bnews.sri-arpa.865>")
+
+
+def test_stat_by_message_id_number_zero(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER + b"223 0 <a@b>\r\n")
+    assert client.stat("<a@b>") == (0, "<a@b>")
+
+
+@pytest.mark.parametrize("number", [b"0", b"-1"])
+def test_listgroup_non_positive_number(connect: Connect, number: bytes) -> None:
+    server = b"211 1 1 1 g\r\n" + number + b"\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPDataError, match="Invalid LISTGROUP line"):
+        list(client.listgroup("g"))
+
+
+def test_xhdr_by_message_id_legacy_rows(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER + b"221 ok\r\n<a@b> subj\r\n.\r\n")
+    assert list(client.xhdr("Subject", "<a@b>")) == [(0, "subj")]
+
+
+def test_newgroups_year_zero_padded(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + b"231 ok\r\n.\r\n")
+    sock.sent = b""
+    assert list(client.newgroups(datetime(999, 1, 2, 3, 4, 5, tzinfo=UTC))) == []
+    assert sock.sent == b"NEWGROUPS 09990102 030405 GMT\r\n"
+
+
+@pytest.mark.parametrize(
+    ("server", "call", "match"),
+    [
+        (b"215 groups\r\n\r\n.\r\n", lambda c: c.list_newsgroups(), "LIST NEWSGROUPS"),
+        (b"225 ok\r\n\r\n.\r\n", lambda c: c.hdr("Subject"), "HDR response"),
+    ],
+)
+def test_empty_line_is_a_data_error(
+    connect: Connect,
+    server: bytes,
+    call: Callable[[nntp.NNTPClient], Iterator[object]],
+    match: str,
+) -> None:
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPDataError, match=f"Invalid {match}"):
+        list(call(client))

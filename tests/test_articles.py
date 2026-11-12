@@ -53,10 +53,13 @@ def test_article(connect: Connect) -> None:
     assert body == b"body\r\n"
 
 
-def test_article_bad_status(connect: Connect) -> None:
-    client, _ = connect(WELCOME + MODE_READER + b"220\r\n")
+@pytest.mark.parametrize("status", [b"220", b"220 x <a@b>"])
+def test_article_bad_status(connect: Connect, status: bytes) -> None:
+    article = status + b"\r\nSubject: s\r\n\r\nbody\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + article + DATE)
     with pytest.raises(nntp.NNTPDataError, match="Invalid ARTICLE status"):
         client.article()
+    assert client.date().year == 2024  # The article was read; in sync
 
 
 @pytest.mark.parametrize("part", [None, 2])
@@ -119,9 +122,30 @@ def test_body_detection_leading_blank_lines(connect: Connect) -> None:
 def test_body_decode_forced(connect: Connect) -> None:
     raw = yenc_encode(b"raw bytes")  # No =ybegin/=yend lines at all
     server = b"222 1 <a@b>\r\n" + raw + b".\r\n" + b"222 2 <b@c>\r\n=ybegin x\r\n.\r\n"
-    client, _ = connect(WELCOME + MODE_READER + server)
-    assert client.body(1, decode=True) == b"raw bytes"
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    with pytest.raises(nntp.NNTPYEncError, match="no =ybegin"):
+        client.body(1, decode=True)
     assert client.body(2, decode=False) == b"=ybegin x\r\n"
+    assert client.date().year == 2024
+
+
+def test_yenc_text_outside_block_dropped(connect: Connect) -> None:
+    body = yenc_body(PLAIN)[:-3] + b"-- \r\nsig\r\n.\r\n"  # After =yend
+    client, _ = connect(WELCOME + MODE_READER + body)
+    assert client.body(1) == PLAIN
+
+
+def test_body_decode_forced_ybegin_prefix_is_not_a_block(connect: Connect) -> None:
+    server = b"222 1 <a@b>\r\n=ybeginners guide\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPYEncError, match="no =ybegin"):
+        client.body(1, decode=True)
+
+
+def test_body_ybegin_prefix_is_plain(connect: Connect) -> None:
+    server = b"222 1 <a@b>\r\n=ybeginners guide\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server)
+    assert client.body(1) == b"=ybeginners guide\r\n"
 
 
 def test_body_two_yenc_blocks(connect: Connect) -> None:
@@ -139,3 +163,9 @@ def test_body_two_yenc_blocks(connect: Connect) -> None:
 def test_body_only_blank_lines(connect: Connect) -> None:
     client, _ = connect(WELCOME + MODE_READER + b"222 1 <a@b>\r\n\r\n\r\n.\r\n")
     assert client.body(1) == b"\r\n\r\n"
+
+
+def test_article_yenc_subject_plain_body(connect: Connect) -> None:
+    article = b"220 1 <a@b>\r\nSubject: file yEnc (1/1)\r\n\r\nplain text\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + article)
+    assert client.article(1)[2] == b"plain text\r\n"  # Detected from the body only

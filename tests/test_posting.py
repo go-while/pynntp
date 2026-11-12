@@ -23,6 +23,31 @@ def test_post(connect: Connect) -> None:
     assert sock.sent == b"POST\r\nSubject: hi\r\n\r\none\r\n..two\r\n.\r\n"
 
 
+def test_post_header_surrogateescape(connect: Connect) -> None:
+    client, sock = connect(
+        WELCOME + MODE_READER + b"340 send\r\n" + b"240 <new@id> posted\r\n"
+    )
+    sock.sent = b""
+    client.post({"Subject": "caf\udce9"}, b"x\n")  # As read with surrogateescape
+    assert b"Subject: caf\xe9\r\n" in sock.sent
+
+
+@pytest.mark.parametrize(
+    ("reply", "result"),
+    [
+        (b"240 Article received <new@id>", "<new@id>"),  # INN
+        (b"240 <new@id> posted", "<new@id>"),
+        (b"240 article posted ok", True),
+        (b"240", True),
+    ],
+)
+def test_post_message_id_from_reply(
+    connect: Connect, reply: bytes, result: str | bool
+) -> None:
+    client, _ = connect(WELCOME + MODE_READER + b"340 send\r\n" + reply + b"\r\n")
+    assert client.post({"Subject": "hi"}, b"x\n") == result
+
+
 def test_post_bad_header_sends_nothing(connect: Connect) -> None:
     client, sock = connect(WELCOME + MODE_READER)
     sock.sent = b""
@@ -47,11 +72,6 @@ def test_post_large_body_spools(connect: Connect) -> None:
     body = b"y" * 1000 + b"\n"
     client.post({"Subject": "hi"}, (body for _ in range(3000)))  # ~3 MB, on disk
     assert sock.sent.endswith(body.replace(b"\n", b"\r\n") * 3000 + b".\r\n")
-
-
-def test_post_without_message_id(connect: Connect) -> None:
-    client, _ = connect(WELCOME + MODE_READER + b"340 send\r\n240\r\n")
-    assert client.post({"Subject": "hi"}, b"body\n") is True
 
 
 def test_post_batches_writes(connect: Connect) -> None:
@@ -114,6 +134,8 @@ def test_ihave_keeps_matching_message_id_header(connect: Connect) -> None:
         ("<a b>", {}),
         ("<a@b>\r\nQUIT", {}),
         ("<>", {}),
+        ("<caf\u00e9@b>", {}),  # Not US-ASCII
+        ("<" + "a" * 249 + ">", {}),  # Over 250 octets
         ("<a@b>", {"Message-ID": "<other@b>"}),
     ],
 )
