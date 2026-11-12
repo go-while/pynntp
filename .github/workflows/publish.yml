@@ -35,7 +35,7 @@ jobs:
           rm -r sdist/nntp  # import the installed wheel, not the source
           cd sdist && PYTHONPATH=. python -m pytest -q -W error::ResourceWarning -p no:cacheprovider tests --ignore=tests/integration
           python -c "import nntp; print(nntp.__file__)"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
@@ -47,7 +47,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist
