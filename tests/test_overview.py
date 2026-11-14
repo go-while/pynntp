@@ -14,6 +14,7 @@ from tests.helpers import (
     MODE_READER,
     OVERVIEW_FMT,
     WELCOME,
+    XFEATURE_OK,
     XOVER_LINES,
     Connect,
     check_xover,
@@ -38,8 +39,9 @@ def test_xover_gzip(connect: Connect, terminator: bool) -> None:
         payload = gzip.compress(XOVER_LINES + b".\r\n")
     else:
         payload = gzip.compress(XOVER_LINES) + b".\r\n"
-    server = OVERVIEW_FMT + b"224 ok COMPRESS=GZIP\r\n" + payload + DATE
+    server = XFEATURE_OK + OVERVIEW_FMT + b"224 ok COMPRESS=GZIP\r\n" + payload + DATE
     client, _ = connect(WELCOME + MODE_READER + server)
+    client.xfeature_compress_gzip()
     check_xover(list(client.xover((1, 2))))
     assert client.date().year == 2024
 
@@ -47,8 +49,9 @@ def test_xover_gzip(connect: Connect, terminator: bool) -> None:
 def test_xover_gzip_bad_trailer_after_terminator(connect: Connect) -> None:
     payload = bytearray(gzip.compress(XOVER_LINES + b".\r\n"))
     payload[-8] ^= 0xFF  # Corrupt the gzip CRC, which follows the terminator
-    server = OVERVIEW_FMT + b"224 ok COMPRESS=GZIP\r\n" + bytes(payload)
+    server = XFEATURE_OK + OVERVIEW_FMT + b"224 ok COMPRESS=GZIP\r\n" + bytes(payload)
     client, _ = connect(WELCOME + MODE_READER + server)
+    client.xfeature_compress_gzip()
     with pytest.raises(nntp.NNTPDataError, match="Decompression failed"):
         list(client.xover((1, 2)))
 

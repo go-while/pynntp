@@ -138,6 +138,10 @@ _DIGITS_RE = re.compile(r"[0-9]+")
 # 211 is left out: it is multi-line only for LISTGROUP.
 _MULTILINE = frozenset({100, 101, 215, 220, 221, 222, 224, 225, 230, 231, 282})
 
+# The last word of the status message of a gzip-compressed response (XFEATURE
+# COMPRESS GZIP). Servers may bracket it. Message-ids are in <>, so never match.
+_GZIP_MARKERS = frozenset({"COMPRESS=GZIP", "[COMPRESS=GZIP]"})
+
 _MAX_COMMAND = 512  # RFC 3977 3.1: command line length, including CRLF
 _MAX_LINE = 0x10000  # Default max_line_length: a response line, including CRLF
 _INFLATE_SIZE = 0x10000  # Most decompressed data produced at a time
@@ -162,6 +166,12 @@ def _after_compress_forbidden(words: list[str]) -> bool:
     if words[:1] in (["AUTHINFO"], ["STARTTLS"], ["COMPRESS"]):
         return True
     return words == ["MODE", "READER"]
+
+
+def _ends_with_gzip_marker(message: str) -> bool:
+    """Whether the last word of a status message is the gzip marker."""
+    words = message.split()
+    return bool(words) and words[-1] in _GZIP_MARKERS
 
 
 def _msgid_article(msgid_article: str | int | None) -> str | None:
@@ -314,6 +324,7 @@ class BaseNNTPClient:
         self._deflate: _Compress | None = None  # Set by COMPRESS (RFC 8054)
         self._inflate: _Decompress | None = None
         self._inflate_more = False  # _inflate may have more output pending
+        self._gzip = False  # Set by XFEATURE COMPRESS GZIP
 
         host = self._address[0]
         self.socket = socket.create_connection(self._address, timeout=self._timeout)
@@ -572,10 +583,11 @@ class BaseNNTPClient:
 
         Args:
             code: The status code (unused).
-            message: The status message; "COMPRESS=GZIP" in it selects gzip.
+            message: The status message. Once XFEATURE COMPRESS GZIP is on, a
+                last word of COMPRESS=GZIP selects gzip.
             yz: The response is yEnc-encoded zlib (XZVER, XZHDR).
         """
-        if "COMPRESS=GZIP" in message:
+        if self._gzip and _ends_with_gzip_marker(message):
             lines = self._info_gzip()
         else:
             lines = self._info_yenczlib() if yz else self._info_plain()
@@ -618,7 +630,8 @@ class BaseNNTPClient:
 
         Args:
             code: The status code (unused).
-            message: The status message; "COMPRESS=GZIP" in it selects gzip.
+            message: The status message. Once XFEATURE COMPRESS GZIP is on, a
+                last word of COMPRESS=GZIP selects gzip.
             yz: The response is yEnc-encoded zlib (XZVER, XZHDR).
         """
         return self._decode(self._info(code, message, yz))
@@ -1763,8 +1776,10 @@ class NNTPClient(BaseNNTPClient):
     def xfeature_compress_gzip(self, terminator: bool = False) -> None:
         """XFEATURE COMPRESS GZIP command.
 
-        Asks the server to gzip-compress multi-line responses from now on; they
-        are decompressed transparently.
+        Asks the server to gzip-compress multi-line responses from now on. Once
+        it succeeds, a response is decompressed only if its status message ends
+        with COMPRESS=GZIP (or [COMPRESS=GZIP]); the setting is lost on
+        reconnect().
 
         Args:
             terminator: Put the terminating line inside the compressed data.
@@ -1775,6 +1790,7 @@ class NNTPClient(BaseNNTPClient):
         args = "TERMINATOR" if terminator else None
 
         self.command("XFEATURE COMPRESS GZIP", args, expect=290)
+        self._gzip = True
 
     def post(
         self,

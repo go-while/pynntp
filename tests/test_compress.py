@@ -16,6 +16,7 @@ from tests.helpers import (
     MODE_READER,
     OVERVIEW_FMT,
     WELCOME,
+    XFEATURE_OK,
     XOVER_LINES,
     Connect,
     FakeSocket,
@@ -143,7 +144,8 @@ def test_compress_twice(connect: Connect) -> None:
 
 def test_gzip_response_inside_compress(connect: Connect) -> None:
     inner = b"224 ok COMPRESS=GZIP\r\n" + gzip.compress(XOVER_LINES) + b".\r\n"
-    server = COMPRESS_OK + deflated(OVERVIEW_FMT, inner)
+    server = COMPRESS_OK + deflated(XFEATURE_OK, OVERVIEW_FMT, inner)
     client, _ = connect(WELCOME + MODE_READER + server)
     client.compress()
+    client.xfeature_compress_gzip()
     check_xover(list(client.xover((1, 2))))
