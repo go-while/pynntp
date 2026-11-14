@@ -143,6 +143,57 @@ def test_stat_no_article(connect: Connect) -> None:
         client.stat(99)
 
 
+@pytest.mark.parametrize("arg", ["", True, False])
+@pytest.mark.parametrize("method", ["stat", "article", "head", "body"])
+def test_message_id_or_number_invalid_sends_nothing(
+    connect: Connect, method: str, arg: object
+) -> None:
+    # An empty string would be sent as the bare verb, which is the current article
+    client, sock = connect(WELCOME + MODE_READER)
+    sock.sent = b""
+    with pytest.raises(ValueError, match="Invalid message-id"):
+        getattr(client, method)(arg)
+    assert sock.sent == b""
+
+
+@pytest.mark.parametrize(
+    ("method", "reply", "verb"),
+    [
+        ("stat", b"223 5 <a@b>\r\n", b"STAT"),
+        ("article", b"220 5 <a@b>\r\nSubject: s\r\n\r\nbody\r\n.\r\n", b"ARTICLE"),
+        ("head", b"221 5 <a@b>\r\nSubject: s\r\n.\r\n", b"HEAD"),
+        ("body", b"222 5 <a@b>\r\nbody\r\n.\r\n", b"BODY"),
+    ],
+)
+def test_message_id_or_number_none_is_current_article(
+    connect: Connect, method: str, reply: bytes, verb: bytes
+) -> None:
+    client, sock = connect(WELCOME + MODE_READER + reply)
+    sock.sent = b""
+    getattr(client, method)(None)
+    assert sock.sent == verb + b"\r\n"
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda c: c.hdr("Subject", ""),
+        lambda c: c.xhdr("Subject", ""),
+        lambda c: c.xzhdr("Subject", ""),
+        lambda c: c.xpat("Subject", "", "*"),
+    ],
+    ids=["hdr", "xhdr", "xzhdr", "xpat"],
+)
+def test_empty_message_id_range_sends_nothing(
+    connect: Connect, call: Callable[[nntp.NNTPClient], object]
+) -> None:
+    client, sock = connect(WELCOME + MODE_READER)
+    sock.sent = b""
+    with pytest.raises(ValueError, match="Invalid message-id"):
+        call(client)
+    assert sock.sent == b""
+
+
 @pytest.mark.parametrize(
     ("name", "numbers", "sent"),
     [

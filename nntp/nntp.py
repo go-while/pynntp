@@ -165,7 +165,18 @@ def _after_compress_forbidden(words: list[str]) -> bool:
 
 
 def _msgid_article(msgid_article: str | int | None) -> str | None:
-    return None if msgid_article is None else str(msgid_article)
+    """Format a message-id or article number argument; None is the current article.
+
+    Raises:
+        ValueError: If the argument is an empty string or a bool. An empty
+            argument would be dropped from the command, and a bool sent as
+            "True" or "False".
+    """
+    if msgid_article is None:
+        return None
+    if isinstance(msgid_article, bool) or msgid_article == "":
+        raise ValueError(f"Invalid message-id or article number: {msgid_article!r}")
+    return str(msgid_article)
 
 
 def _inflate(inflate: _Decompress, data: bytes) -> bytes:

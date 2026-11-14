@@ -70,9 +70,13 @@ def unparse_msgid_range(obj: str | Range) -> str:
         The message-id unchanged, or the formatted range.
 
     Raises:
-        ValueError: If obj is not a valid range.
+        ValueError: If obj is not a valid range, or is an empty message-id. An
+            empty argument would be dropped from the command, which then acts
+            on the current article.
     """
     if isinstance(obj, str):
+        if not obj:
+            raise ValueError(f"Invalid message-id or article range: {obj!r}")
         return obj
 
     return unparse_range(obj)
