@@ -1858,8 +1858,8 @@ class NNTPClient(BaseNNTPClient):
 
         See <https://datatracker.ietf.org/doc/html/rfc3977#section-6.3.1>
 
-        LF line endings in the body are sent as CRLF and lines starting with "."
-        are dot-stuffed.
+        LF line endings in the body are sent as CRLF. Header and body lines
+        starting with "." are dot-stuffed.
 
         Args:
             headers: The article headers.
@@ -1962,7 +1962,9 @@ class NNTPClient(BaseNNTPClient):
     def _prepare_article(
         self, hdrs: str, body: str | bytes | Iterable[bytes]
     ) -> Iterator[IO[bytes]]:
-        """Build the article on the wire: headers, dot-stuffed CRLF body, ".".
+        """Build the article on the wire: CRLF lines, dot-stuffed, then ".".
+
+        Header lines are stuffed too: a header name may start with ".".
 
         Raises:
             NNTPDataError: If a body line contains CR or NUL.
@@ -1971,10 +1973,10 @@ class NNTPClient(BaseNNTPClient):
             body = body.encode(self.encoding, self.errors)
         if isinstance(body, bytes):
             body = io.BytesIO(body)
+        head = io.BytesIO(hdrs.encode(self.encoding, self.errors))
 
         with tempfile.SpooledTemporaryFile(max_size=_SPOOL_SIZE) as article:
-            article.write(hdrs.encode(self.encoding, self.errors))
-            for line in body:
+            for line in itertools.chain(head, body):
                 if line.startswith(b"."):
                     line = b"." + line
                 if line.endswith(b"\n"):
