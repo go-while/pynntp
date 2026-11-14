@@ -571,6 +571,9 @@ class BaseNNTPClient:
             raise NNTPDataError("Bad yEnc data: second =ybegin after the trailer")
         if not inflate.eof:
             raise NNTPDataError("Decompression failed: compressed data is truncated")
+        # A finished stream may end without CRLF; do not lose its last row.
+        if last := buf.read():
+            yield last
 
     def _info(self, code: int, message: str, yz: bool = False) -> Iterator[bytes]:
         """Return the lines of a multi-line response as bytes.
