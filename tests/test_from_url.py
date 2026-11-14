@@ -120,6 +120,8 @@ def test_other_arguments_pass_through(init_args: dict[str, Any]) -> None:
         ("nntp://h?timeout=", "Invalid URL timeout"),
         ("nntp://h?reader=maybe", "Invalid URL reader"),
         ("nntp://h:99999", "out of range"),
+        ("nntps://fred:1?timeout=s3cret@h", "'@' after the host"),
+        ("snews://h/abc@example.com", "'@' after the host"),
     ],
 )
 def test_invalid_urls(init_args: dict[str, Any], url: str, match: str) -> None:
@@ -206,10 +208,42 @@ def test_url_is_validated_even_when_overridden(init_args: dict[str, Any]) -> Non
         "nntps://fred:s3cret@h?timeout=1&timeout=2",
         "nntps://fred:s3cret@h?nope=1",
         "nntps://fred:s3cret@h?timeout=abc",
+        "nntps://fred:s3cret",  # No "@": the password is taken as the port
+        "nntps://fred:s3cret/",
+        "nntps://fred:s3c?ret@news.example.com",  # Unencoded "?" ends the netloc
+        "nntps://fred:123?s3cret@news.example.com",  # ...and so does this
+        "nntps://fred:1?timeout=s3cret@h",
+        "nntps://fred:1?reader=s3cret@h",
+        "fred:s3cret@news.example.com",  # No scheme: the user name is taken as one
     ],
 )
 def test_errors_never_show_the_password(init_args: dict[str, Any], url: str) -> None:
     with pytest.raises(ValueError) as info:  # noqa: PT011
         nntp.NNTPClient.from_url(url)
-    assert "s3cret" not in str(info.value)
+    assert "s3c" not in str(info.value)
+    assert "fred" not in str(info.value)
+    assert info.value.__context__ is None
+    assert info.value.__cause__ is None
+    assert init_args == {}
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        # NFKC maps these full-width characters to "#", "@" and ":", which
+        # urlsplit() rejects, quoting the netloc in its message
+        "nntps://fred:s3cr\uff03et@news.example.com",
+        "nntps://fred:s3cret@news\uff20example.com",
+        "nntps://fred:s3cret@news.example.com\uff1a119",
+        "nntps://fred:s3cr\uff03et@news.example.com:119",
+    ],
+)
+def test_unparsable_urls_are_not_chained(init_args: dict[str, Any], url: str) -> None:
+    with pytest.raises(ValueError, match="Invalid NNTP URL") as info:
+        nntp.NNTPClient.from_url(url)
+    assert str(info.value) == "Invalid NNTP URL"
+    assert "fred" not in str(info.value)
+    assert "s3cr" not in str(info.value)
+    assert info.value.__cause__ is None
+    assert info.value.__context__ is None
     assert init_args == {}
