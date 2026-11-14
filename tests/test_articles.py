@@ -94,6 +94,16 @@ def test_yenc_missing_trailer(connect: Connect) -> None:
         client.body(1)
 
 
+def test_yenc_trailer_huge_size_keeps_connection(connect: Connect) -> None:
+    # int() refuses more than 4300 digits: a bad size, not an exception mid-body
+    server = yenc_body(PLAIN, trailer="size=" + "0" * 4301) + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPYEncError, match="no valid size") as info:
+        client.body(1)
+    assert info.value.data == PLAIN
+    assert client.date().year == 2024  # Whole body was read; still in sync
+
+
 def test_yenc_trailer_without_crc_checks_size_only(connect: Connect) -> None:
     server = yenc_body(PLAIN, trailer="size=768")
     client, _ = connect(WELCOME + MODE_READER + server)

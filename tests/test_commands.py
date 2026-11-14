@@ -10,7 +10,7 @@ import pytest
 import nntp
 from nntp.headerdict import HeaderDict
 from nntp.types import Newsgroup, SSLMode
-from tests.helpers import LIST, MODE_READER, WELCOME, Connect
+from tests.helpers import DATE, LIST, MODE_READER, WELCOME, Connect
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -56,6 +56,17 @@ def test_next_bad_status(connect: Connect) -> None:
     client, _ = connect(WELCOME + MODE_READER + b"223 x\r\n")
     with pytest.raises(nntp.NNTPDataError, match="Invalid NEXT status"):
         client.next()
+
+
+@pytest.mark.parametrize("verb", ["stat", "next", "last"])
+def test_select_huge_number(connect: Connect, verb: str) -> None:
+    # Digits only, but more than int() accepts: a data error, still in sync
+    reply = b"223 " + b"1" * 4301 + b" <a@b>\r\n"
+    client, _ = connect(WELCOME + MODE_READER + reply + DATE)
+    args = (1,) if verb == "stat" else ()
+    with pytest.raises(nntp.NNTPDataError, match=f"Invalid {verb.upper()} status"):
+        getattr(client, verb)(*args)
+    assert client.date().year == 2024
 
 
 @pytest.mark.parametrize(("verb", "code"), [("hdr", b"225"), ("xhdr", b"221")])

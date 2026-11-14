@@ -103,6 +103,9 @@ def test_check_trailer() -> None:
         is None
     )
     assert check_trailer(b"=yend size=5", 5, crc, part=False) is None
+    # Leading zeros are fine, up to what int() accepts
+    long_size = b"=yend size=" + b"0" * 4000 + b"5"
+    assert check_trailer(long_size, 5, crc, part=False) is None
     assert check_trailer(b"=yend size=6", 5, crc, part=False) == (
         "decoded 5 bytes, trailer says 6"
     )
@@ -120,6 +123,8 @@ def test_check_trailer() -> None:
         (b"=yend size=", "no valid size"),
         (b"=yend size=5x", "no valid size"),
         (b"=yend size=-5", "no valid size"),
+        # int() refuses more than 4300 digits, even when they are all digits
+        (b"=yend size=" + b"0" * 4301, "no valid size"),
         (b"=yend size=5 crc32=000000000", "invalid crc32"),  # 9 digits
         (b"=yend size=5 crc32=xyz", "invalid crc32"),
         (b"=yend size=5 part=x pcrc32=0", "invalid part"),

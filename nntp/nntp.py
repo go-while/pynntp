@@ -1393,7 +1393,11 @@ class NNTPClient(BaseNNTPClient):
             or not _MESSAGE_ID_RE.fullmatch(parts[1])
         ):
             raise NNTPDataError(f'Invalid {verb} status "{message}"')
-        return int(parts[0]), parts[1]
+        try:
+            number = int(parts[0])
+        except ValueError as e:  # More digits than int() accepts
+            raise NNTPDataError(f'Invalid {verb} status "{message}"') from e
+        return number, parts[1]
 
     def _read_body(self, lines: Iterator[bytes], decode: bool | None = None) -> bytes:
         """Read an article body, decoding yEnc if decode is set or detected.
