@@ -213,3 +213,25 @@ def test_errors_never_show_the_password(init_args: dict[str, Any], url: str) -> 
         nntp.NNTPClient.from_url(url)
     assert "s3cret" not in str(info.value)
     assert init_args == {}
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        # NFKC maps these full-width characters to "#", "@" and ":", which
+        # urlsplit() rejects, quoting the netloc in its message
+        "nntps://fred:s3cr\uff03et@news.example.com",
+        "nntps://fred:s3cret@news\uff20example.com",
+        "nntps://fred:s3cret@news.example.com\uff1a119",
+        "nntps://fred:s3cr\uff03et@news.example.com:119",
+    ],
+)
+def test_unparsable_urls_are_not_chained(init_args: dict[str, Any], url: str) -> None:
+    with pytest.raises(ValueError, match="Invalid NNTP URL") as info:
+        nntp.NNTPClient.from_url(url)
+    assert str(info.value) == "Invalid NNTP URL"
+    assert "fred" not in str(info.value)
+    assert "s3cr" not in str(info.value)
+    assert info.value.__cause__ is None
+    assert info.value.__suppress_context__
+    assert init_args == {}

@@ -865,12 +865,16 @@ class NNTPClient(BaseNNTPClient):
                 for the constructor.
 
         Raises:
-            ValueError: If the URL is not valid for NNTP: an unknown scheme or
-                query parameter, a repeated parameter, a path or fragment, no
-                host, or a bad port, timeout or reader value. The message never
-                includes the URL, which may hold a password.
+            ValueError: If the URL is not valid for NNTP: one that cannot be
+                parsed, an unknown scheme or query parameter, a repeated
+                parameter, a path or fragment, no host, or a bad port, timeout
+                or reader value. The message never includes the URL, which may
+                hold a password.
         """
-        parts = urllib.parse.urlsplit(url)
+        try:
+            parts = urllib.parse.urlsplit(url)
+        except ValueError:  # Its message quotes the netloc, which has the password
+            raise ValueError("Invalid NNTP URL") from None
         scheme = parts.scheme.lower()
         if scheme not in _URL_SCHEMES:
             raise ValueError(f"Unsupported URL scheme: {parts.scheme!r}")
