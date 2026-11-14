@@ -116,7 +116,25 @@ def _split_url(url: str) -> tuple[urllib.parse.SplitResult, int | None]:
     return parts, port
 
 
-def _url_settings(parts: urllib.parse.SplitResult) -> FromURLOptions:
+def _unquote_user_info(value: str, encoding: str, errors: str) -> str:
+    """Percent-decode a user name or password as the client will encode it.
+
+    The bytes of the %XX escapes are decoded with the client's encoding and
+    errors, so login() encodes them back to the same bytes (with the default
+    surrogateescape, a byte that is not valid UTF-8 survives).
+    """
+    try:
+        return urllib.parse.unquote(value, encoding=encoding, errors=errors)
+    except UnicodeDecodeError:
+        pass
+    # Raised after the except block, so the decode error is not kept as
+    # __context__: its repr holds the bytes of the user info
+    raise ValueError(f"Invalid NNTP URL user info: not decodable as {encoding}")
+
+
+def _url_settings(
+    parts: urllib.parse.SplitResult, encoding: str, errors: str
+) -> FromURLOptions:
     """The constructor settings given by a from_url() URL."""
     query = urllib.parse.parse_qs(parts.query, keep_blank_values=True)
     if set(query) - set(_URL_QUERY):
@@ -127,9 +145,9 @@ def _url_settings(parts: urllib.parse.SplitResult) -> FromURLOptions:
 
     settings: FromURLOptions = {}
     if parts.username is not None:
-        settings["username"] = urllib.parse.unquote(parts.username)
+        settings["username"] = _unquote_user_info(parts.username, encoding, errors)
     if parts.password is not None:
-        settings["password"] = urllib.parse.unquote(parts.password)
+        settings["password"] = _unquote_user_info(parts.password, encoding, errors)
     if "timeout" in query:
         settings["timeout"] = _url_timeout(query["timeout"][0])
     if "reader" in query:
@@ -885,6 +903,10 @@ class NNTPClient(BaseNNTPClient):
         (seconds, or "none") and reader ("true"/"false", "1"/"0", "yes"/"no" or
         "on"/"off").
 
+        A %XX escape in the user info is one byte, decoded with the client's
+        encoding (UTF-8 by default), so a byte that is not UTF-8 can be given
+        as %XX and is sent unchanged.
+
         Keyword arguments override the URL, and the constructor's defaults
         apply to anything set by neither. Passing the password as an argument
         keeps it out of the URL, which tends to end up in logs.
@@ -898,8 +920,9 @@ class NNTPClient(BaseNNTPClient):
             ValueError: If the URL is not valid for NNTP: one that cannot be
                 parsed, an unknown scheme, query parameter or repeated
                 parameter, an '@' after the host (user info that is not
-                percent-encoded), a path or fragment, no host, or a bad port,
-                timeout or reader value. The message never includes the
+                percent-encoded), a path or fragment, no host, a bad port,
+                timeout or reader value, or user info that the client's
+                encoding cannot decode. The message never includes the
                 password or other parts of the URL.
         """
         parts, port = _split_url(url)
@@ -923,7 +946,7 @@ class NNTPClient(BaseNNTPClient):
 
         # The options override the URL; anything set by neither is left to the
         # constructor's defaults.
-        settings = _url_settings(parts)
+        settings = _url_settings(parts, cls.encoding, cls.errors)
         settings.update(options)
 
         use_ssl, ssl_mode = _URL_SCHEMES[scheme]
