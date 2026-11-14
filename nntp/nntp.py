@@ -168,6 +168,18 @@ def _msgid_article(msgid_article: str | int | None) -> str | None:
     return None if msgid_article is None else str(msgid_article)
 
 
+def _item_lines(item: bytes) -> Iterator[bytes]:
+    """Split one item of a body iterable into lines.
+
+    An item may hold several LF-terminated lines. An empty item is one empty
+    line, and an item without LF ends its line at its end.
+    """
+    if item:
+        yield from io.BytesIO(item)
+    else:
+        yield item
+
+
 def _inflate(inflate: _Decompress, data: bytes) -> bytes:
     """Decompress at most _INFLATE_SIZE bytes of output.
 
@@ -1791,7 +1803,7 @@ class NNTPClient(BaseNNTPClient):
         Args:
             headers: The article headers.
             body: The body as str, bytes, or an iterable of byte lines such as a
-                binary file.
+                binary file. An item may also hold several lines.
 
         Returns:
             The message-id if the server's reply includes one (common, though not
@@ -1886,7 +1898,8 @@ class NNTPClient(BaseNNTPClient):
     ) -> Iterator[IO[bytes]]:
         """Build the article on the wire: CRLF lines, dot-stuffed, then ".".
 
-        Header lines are stuffed too: a header name may start with ".".
+        Header lines are stuffed too: a header name may start with ".". Each
+        item of a body iterable may hold several lines.
 
         Raises:
             NNTPDataError: If a body line contains CR or NUL.
@@ -1894,11 +1907,13 @@ class NNTPClient(BaseNNTPClient):
         if isinstance(body, str):
             body = body.encode(self.encoding, self.errors)
         if isinstance(body, bytes):
-            body = io.BytesIO(body)
+            lines: Iterable[bytes] = io.BytesIO(body)
+        else:
+            lines = itertools.chain.from_iterable(map(_item_lines, body))
         head = io.BytesIO(hdrs.encode(self.encoding, self.errors))
 
         with tempfile.SpooledTemporaryFile(max_size=_SPOOL_SIZE) as article:
-            for line in itertools.chain(head, body):
+            for line in itertools.chain(head, lines):
                 if line.startswith(b"."):
                     line = b"." + line
                 if line.endswith(b"\n"):

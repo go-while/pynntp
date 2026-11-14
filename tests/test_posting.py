@@ -208,3 +208,22 @@ def test_post_fold_with_dot_line_sends_nothing(connect: Connect) -> None:
     with pytest.raises(ValueError, match="Invalid header value"):
         client.post({"Subject": "a\n.b"}, b"x\n")
     assert sock.sent == b""
+
+
+@pytest.mark.parametrize(
+    ("items", "lines"),
+    [
+        ([b"x\n.\nQUIT\n"], b"x\r\n..\r\nQUIT\r\n"),  # Interior LF ends a line
+        ([b"a\nb\r\n.c\n", b"d"], b"a\r\nb\r\n..c\r\nd\r\n"),  # Several lines, CRLF
+        ([b"x\n\n"], b"x\r\n\r\n"),  # Empty line inside an item
+        ([b"a", b".b", b"c\n"], b"a\r\n..b\r\nc\r\n"),  # No LF: still one line
+        ([b"", b"x\n"], b"\r\nx\r\n"),  # Empty item: an empty line, as before
+    ],
+)
+def test_post_body_item_lines_are_split(
+    connect: Connect, items: list[bytes], lines: bytes
+) -> None:
+    client, sock = connect(WELCOME + MODE_READER + b"340 send\r\n240 ok\r\n")
+    sock.sent = b""
+    client.post({"Subject": "hi"}, items)
+    assert sock.sent == b"POST\r\nSubject: hi\r\n\r\n" + lines + b".\r\n"
