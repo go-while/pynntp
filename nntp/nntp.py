@@ -316,7 +316,11 @@ class BaseNNTPClient:
         self._inflate_more = False  # _inflate may have more output pending
 
         host = self._address[0]
-        self.socket = socket.create_connection(self._address, timeout=self._timeout)
+        try:
+            self.socket = socket.create_connection(self._address, timeout=self._timeout)
+        except BaseException:
+            self._broken = True  # Still closed: reconnect() closed the old socket
+            raise
         try:
             if self._use_ssl and self._ssl_mode == SSLMode.IMPLICIT:
                 self._enable_tls(host)
