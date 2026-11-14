@@ -53,7 +53,17 @@ def test_article(connect: Connect) -> None:
     assert body == b"body\r\n"
 
 
-@pytest.mark.parametrize("status", [b"220", b"220 x <a@b>"])
+@pytest.mark.parametrize(
+    "status",
+    [
+        b"220",
+        b"220 x <a@b>",
+        b"220 -1 <a@b>",
+        b"220 +1 <a@b>",
+        b"220 1_0 <a@b>",
+        b"220 \xd9\xa1 <a@b>",  # ARABIC-INDIC ONE
+    ],
+)
 def test_article_bad_status(connect: Connect, status: bytes) -> None:
     article = status + b"\r\nSubject: s\r\n\r\nbody\r\n.\r\n"
     client, _ = connect(WELCOME + MODE_READER + article + DATE)
@@ -67,6 +77,21 @@ def test_head_folded_whitespace(connect: Connect) -> None:
     client, _ = connect(WELCOME + MODE_READER + server)
     assert client.head(1)["X-Text"] == '"one  two"'
     assert client.date().year == 2024
+
+
+def test_article_leading_zeros(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER + b"220 007 <a@b>\r\n\r\nbody\r\n.\r\n")
+    articleno, _, body = client.article()
+    assert articleno == 7
+    assert body == b"body\r\n"
+
+
+def test_article_by_message_id_number_zero(connect: Connect) -> None:
+    # RFC 3977 6.2.1: a message-id lookup reports article number 0
+    client, _ = connect(WELCOME + MODE_READER + b"220 0 <a@b>\r\n\r\nbody\r\n.\r\n")
+    articleno, _, body = client.article("<a@b>")
+    assert articleno == 0
+    assert body == b"body\r\n"
 
 
 @pytest.mark.parametrize("part", [None, 2])

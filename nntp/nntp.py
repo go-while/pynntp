@@ -208,6 +208,16 @@ def _msgid_article(msgid_article: str | int | None) -> str | None:
     return str(msgid_article)
 
 
+def _article_number(text: str) -> int:
+    """Parse an article number from a response: ASCII digits only.
+
+    int() would also take "-1", "+1", "1_0", " 1 " and non-ASCII digits.
+    """
+    if not _DIGITS_RE.fullmatch(text):
+        raise ValueError(f"{text!r} is not an article number")
+    return int(text)
+
+
 def _inflate(inflate: _Decompress, data: bytes) -> bytes:
     """Decompress at most _INFLATE_SIZE bytes of output.
 
@@ -1425,9 +1435,10 @@ class NNTPClient(BaseNNTPClient):
         def numbers() -> Iterator[int]:
             for line in lines:
                 with self._data_errors("LISTGROUP line"):
-                    number = int(line)
+                    text = line.rstrip("\r\n")
+                    number = _article_number(text)
                     if number < 1:
-                        raise ValueError(f"{number} is not an article number")
+                        raise ValueError(f"{text!r} is not an article number")
                 yield number
 
         return numbers()
@@ -1617,7 +1628,7 @@ class NNTPClient(BaseNNTPClient):
         # Parsed only now, so a bad number never leaves the article unread
         parts = message.split(None, 1)
         try:
-            articleno = int(parts[0])
+            articleno = _article_number(parts[0])
         except (IndexError, ValueError) as e:
             raise NNTPDataError(f'Invalid ARTICLE status "{message}"') from e
 
@@ -1787,7 +1798,7 @@ class NNTPClient(BaseNNTPClient):
             for line in lines:
                 parts = line.rstrip("\r\n").split("\t")
                 with self._data_errors(f"{verb} response"):
-                    articleno = int(parts[0])
+                    articleno = _article_number(parts[0])
                 values = parts[1:]
                 for i in full:
                     if i < len(values):
