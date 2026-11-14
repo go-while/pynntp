@@ -402,6 +402,16 @@ def test_unexpected_multiline_reply_is_read(connect: Connect, call: str) -> None
     assert client.date().year == 2024
 
 
+def test_unexpected_202_reply_is_read(connect: Connect) -> None:
+    # 202 (LIST EXTENSIONS) is multi-line: a block where 215 was expected is read
+    server = b"202 extensions\r\n111 19990101000000\r\n.\r\n" + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPReplyError) as info:
+        client.command("LIST", expect=215)
+    assert info.value.code == 202
+    assert client.date().year == 2024  # Not 1999 from the unread block
+
+
 def test_unexpected_multiline_final_post_reply_is_read(connect: Connect) -> None:
     server = b"340 send\r\n" + b"220 0 <a@b>\r\n111 19990101000000\r\n.\r\n" + DATE
     client, _ = connect(WELCOME + MODE_READER + server)

@@ -134,9 +134,9 @@ _STATUS_CODE_RE = re.compile(rb"[1-5][0-9]{2}")
 
 _DIGITS_RE = re.compile(r"[0-9]+")
 
-# RFC 3977 3.4.1 (and 2980 for 282): replies followed by a multi-line block.
-# 211 is left out: it is multi-line only for LISTGROUP.
-_MULTILINE = frozenset({100, 101, 215, 220, 221, 222, 224, 225, 230, 231, 282})
+# RFC 3977 3.4.1 (and 2980 for 282; 202 is LIST EXTENSIONS): replies followed by
+# a multi-line block. 211 is left out: it is multi-line only for LISTGROUP.
+_MULTILINE = frozenset({100, 101, 202, 215, 220, 221, 222, 224, 225, 230, 231, 282})
 
 _MAX_COMMAND = 512  # RFC 3977 3.1: command line length, including CRLF
 _MAX_LINE = 0x10000  # Default max_line_length: a response line, including CRLF
@@ -638,6 +638,13 @@ class BaseNNTPClient:
         If the server replies 480, AUTHINFO USER/PASS is sent and the command
         retried, except for AUTHINFO, MODE READER and STARTTLS, where the 480
         is raised. A full command line can also be passed as verb.
+
+        Only the status line is read. A success reply that is followed by a
+        multi-line block (e.g. LIST, 215) leaves the block unread, and the next
+        response read would take its lines as status lines. Use the method for
+        that command (list(), over(), ...), or pass the returned code and
+        message to info(). A block after a reply that is not one of expect is
+        read (see _unexpected).
 
         Args:
             verb: The command.
