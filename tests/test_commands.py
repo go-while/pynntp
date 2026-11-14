@@ -311,7 +311,10 @@ def test_stat_by_message_id_number_zero(connect: Connect) -> None:
 def test_listgroup_non_positive_number(connect: Connect, number: bytes) -> None:
     server = b"211 1 1 1 g\r\n" + number + b"\r\n.\r\n"
     client, _ = connect(WELCOME + MODE_READER + server)
-    with pytest.raises(nntp.NNTPDataError, match="Invalid LISTGROUP line"):
+    with pytest.raises(
+        nntp.NNTPDataError,
+        match=f"Invalid LISTGROUP line: '{number.decode()}' is not an article number",
+    ):
         list(client.listgroup("g"))
 
 

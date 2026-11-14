@@ -1332,9 +1332,10 @@ class NNTPClient(BaseNNTPClient):
         def numbers() -> Iterator[int]:
             for line in lines:
                 with self._data_errors("LISTGROUP line"):
-                    number = _article_number(line.rstrip("\r\n"))
+                    text = line.rstrip("\r\n")
+                    number = _article_number(text)
                     if number < 1:
-                        raise ValueError(f"{number} is not an article number")
+                        raise ValueError(f"{text!r} is not an article number")
                 yield number
 
         return numbers()

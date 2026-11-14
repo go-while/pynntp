@@ -79,6 +79,14 @@ def test_article_leading_zeros(connect: Connect) -> None:
     assert body == b"body\r\n"
 
 
+def test_article_by_message_id_number_zero(connect: Connect) -> None:
+    # RFC 3977 6.2.1: a message-id lookup reports article number 0
+    client, _ = connect(WELCOME + MODE_READER + b"220 0 <a@b>\r\n\r\nbody\r\n.\r\n")
+    articleno, _, body = client.article("<a@b>")
+    assert articleno == 0
+    assert body == b"body\r\n"
+
+
 @pytest.mark.parametrize("part", [None, 2])
 def test_yenc_valid(connect: Connect, part: int | None) -> None:
     client, _ = connect(WELCOME + MODE_READER + yenc_body(PLAIN, part=part))
