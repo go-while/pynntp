@@ -899,8 +899,8 @@ class NNTPClient(BaseNNTPClient):
                 parsed, an unknown scheme, query parameter or repeated
                 parameter, an '@' after the host (user info that is not
                 percent-encoded), a path or fragment, no host, or a bad port,
-                timeout or reader value. The
-                message never includes the password or other parts of the URL.
+                timeout or reader value. The message never includes the
+                password or other parts of the URL.
         """
         parts, port = _split_url(url)
         scheme = parts.scheme.lower()
