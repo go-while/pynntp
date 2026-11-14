@@ -1785,8 +1785,8 @@ class NNTPClient(BaseNNTPClient):
 
         See <https://datatracker.ietf.org/doc/html/rfc3977#section-6.3.1>
 
-        LF line endings in the body are sent as CRLF and lines starting with "."
-        are dot-stuffed.
+        LF line endings in the body are sent as CRLF. Header and body lines
+        starting with "." are dot-stuffed.
 
         Args:
             headers: The article headers.
