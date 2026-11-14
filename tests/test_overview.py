@@ -107,15 +107,16 @@ def test_over(connect: Connect, arg: object, sent: bytes) -> None:
     assert sock.sent.endswith(sent + b"\r\n")
 
 
+@pytest.mark.parametrize("arg", ["", " ", "\t"])
 @pytest.mark.parametrize("method", ["over", "xover"])
 def test_overview_empty_message_id_range_sends_nothing(
-    connect: Connect, method: str
+    connect: Connect, method: str, arg: str
 ) -> None:
     client, sock = connect(WELCOME + MODE_READER + OVERVIEW_FMT)
     assert client.overview_fmt[0] == "Subject"  # Fetched first, not checked
     sock.sent = b""
     with pytest.raises(ValueError, match="Invalid message-id"):
-        getattr(client, method)("")
+        getattr(client, method)(arg)
     assert sock.sent == b""
 
 

@@ -143,7 +143,7 @@ def test_stat_no_article(connect: Connect) -> None:
         client.stat(99)
 
 
-@pytest.mark.parametrize("arg", ["", True, False])
+@pytest.mark.parametrize("arg", ["", " ", "\t", True, False])
 @pytest.mark.parametrize("method", ["stat", "article", "head", "body"])
 def test_message_id_or_number_invalid_sends_nothing(
     connect: Connect, method: str, arg: object
@@ -174,23 +174,24 @@ def test_message_id_or_number_none_is_current_article(
     assert sock.sent == verb + b"\r\n"
 
 
+@pytest.mark.parametrize("arg", ["", " ", "\t"])
 @pytest.mark.parametrize(
     "call",
     [
-        lambda c: c.hdr("Subject", ""),
-        lambda c: c.xhdr("Subject", ""),
-        lambda c: c.xzhdr("Subject", ""),
-        lambda c: c.xpat("Subject", "", "*"),
+        lambda c, a: c.hdr("Subject", a),
+        lambda c, a: c.xhdr("Subject", a),
+        lambda c, a: c.xzhdr("Subject", a),
+        lambda c, a: c.xpat("Subject", a, "*"),
     ],
     ids=["hdr", "xhdr", "xzhdr", "xpat"],
 )
 def test_empty_message_id_range_sends_nothing(
-    connect: Connect, call: Callable[[nntp.NNTPClient], object]
+    connect: Connect, call: Callable[[nntp.NNTPClient, str], object], arg: str
 ) -> None:
     client, sock = connect(WELCOME + MODE_READER)
     sock.sent = b""
     with pytest.raises(ValueError, match="Invalid message-id"):
-        call(client)
+        call(client, arg)
     assert sock.sent == b""
 
 
