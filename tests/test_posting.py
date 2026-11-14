@@ -175,3 +175,36 @@ def test_post_unexpected_final_reply(connect: Connect) -> None:
         client.post({"Subject": "x"}, b"x\n")
     assert info.value.code == 299
     assert client.date().year == 2024
+
+
+def test_post_dot_header_name_is_stuffed(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + b"340 send\r\n240 ok\r\n")
+    sock.sent = b""
+    client.post({".X-Foo": "1", "Subject": "hi"}, b"x\n")
+    # A server would read a bare ".X-Foo" line as the end of a dot-stuffed line
+    assert sock.sent == b"POST\r\n..X-Foo: 1\r\nSubject: hi\r\n\r\nx\r\n.\r\n"
+
+
+def test_ihave_dot_header_name_is_stuffed(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + IHAVE_OK)
+    sock.sent = b""
+    client.ihave("<a@b>", {".X-Foo": "1"}, b"x\n")
+    assert sock.sent == (
+        b"IHAVE <a@b>\r\n..X-Foo: 1\r\nMessage-ID: <a@b>\r\n\r\nx\r\n.\r\n"
+    )
+
+
+def test_post_folded_header_continuation_is_not_stuffed(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + b"340 send\r\n240 ok\r\n")
+    sock.sent = b""
+    client.post({"Subject": "a\r\n .b"}, b"x\n")  # Fold; the line starts with a space
+    assert sock.sent == b"POST\r\nSubject: a\r\n .b\r\n\r\nx\r\n.\r\n"
+
+
+def test_post_fold_with_dot_line_sends_nothing(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER)
+    sock.sent = b""
+    # A bare LF is not a fold, so a line starting with "." is refused, not sent
+    with pytest.raises(ValueError, match="Invalid header value"):
+        client.post({"Subject": "a\n.b"}, b"x\n")
+    assert sock.sent == b""
