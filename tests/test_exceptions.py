@@ -41,12 +41,16 @@ if TYPE_CHECKING:
 )
 def test_error_round_trips(make: Callable[[], Exception]) -> None:
     err = make()
+    err.add_note("note")
+    vars(err)["extra"] = "kept"
     pickled = pickle.loads(pickle.dumps(err))  # noqa: S301 - own output
-    for clone in (pickled, copy.copy(err)):
+    for clone in (pickled, copy.copy(err), copy.deepcopy(err)):
         assert type(clone) is type(err)
         assert str(clone) == str(err)
         assert clone.args == err.args
         assert vars(clone) == vars(err)
+        assert vars(clone)["extra"] == "kept"
+        assert vars(clone)["__notes__"] == ["note"]
 
 
 def test_yenc_error_keeps_data_after_pickle() -> None:
