@@ -246,6 +246,10 @@ class NNTPYEncError(NNTPDataError):
         super().__init__(message)
         self.data = data
 
+    def __reduce__(self) -> tuple[type[NNTPYEncError], tuple[str, bytes]]:
+        # Pickle and copy call cls(*args), but args holds only the message.
+        return (type(self), (self.args[0], self.data))
+
 
 class BaseNNTPClient:
     """NNTP connection, command and response handling.
