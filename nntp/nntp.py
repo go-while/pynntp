@@ -90,9 +90,9 @@ class FromURLOptions(TypedDict, total=False):
 def _split_url(url: str) -> tuple[urllib.parse.SplitResult, int | None]:
     """Split a from_url() URL and read its port.
 
-    The errors of urlsplit() and of the port quote the netloc, which may hold
-    the password, so they are replaced here. The new errors are raised after
-    the except blocks, so the originals are not kept as __context__ either.
+    The errors of urlsplit() and of the port may quote parts of the URL, which
+    may hold the password, so they are replaced here. The new errors are raised
+    after the except blocks, so the originals are not kept as __context__ either.
     """
     parts: urllib.parse.SplitResult | None
     try:
@@ -109,7 +109,10 @@ def _split_url(url: str) -> tuple[urllib.parse.SplitResult, int | None]:
     except ValueError:
         bad_port = True
     if bad_port:
-        raise ValueError("Invalid NNTP URL port: not a number, or out of range")
+        raise ValueError(
+            "Invalid NNTP URL port: not a number, or out of range "
+            "(percent-encode '?', '#', '/' and '@' in the user info)"
+        )
     return parts, port
 
 
@@ -894,8 +897,9 @@ class NNTPClient(BaseNNTPClient):
         Raises:
             ValueError: If the URL is not valid for NNTP: one that cannot be
                 parsed, an unknown scheme, query parameter or repeated
-                parameter, a user info that is not percent-encoded, a path or
-                fragment, no host, or a bad port, timeout or reader value. The
+                parameter, an '@' after the host (user info that is not
+                percent-encoded), a path or fragment, no host, or a bad port,
+                timeout or reader value. The
                 message never includes the password or other parts of the URL.
         """
         parts, port = _split_url(url)
@@ -906,7 +910,10 @@ class NNTPClient(BaseNNTPClient):
         # An "@" after "?", "/" or "#" means the user info was not percent-encoded
         # and may hold the password, so it is not shown
         if any("@" in part for part in (parts.query, parts.path, parts.fragment)):
-            raise ValueError("Invalid NNTP URL: user info must be percent-encoded")
+            raise ValueError(
+                "Invalid NNTP URL: '@' after the host; no path, query or fragment "
+                "is allowed, and user info must be percent-encoded"
+            )
         if not parts.hostname:
             raise ValueError("NNTP URL has no host")
         if parts.path not in ("", "/") or parts.fragment:

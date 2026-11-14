@@ -120,6 +120,8 @@ def test_other_arguments_pass_through(init_args: dict[str, Any]) -> None:
         ("nntp://h?timeout=", "Invalid URL timeout"),
         ("nntp://h?reader=maybe", "Invalid URL reader"),
         ("nntp://h:99999", "out of range"),
+        ("nntps://fred:1?timeout=s3cret@h", "'@' after the host"),
+        ("snews://h/abc@example.com", "'@' after the host"),
     ],
 )
 def test_invalid_urls(init_args: dict[str, Any], url: str, match: str) -> None:
