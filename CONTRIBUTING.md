@@ -85,6 +85,12 @@ To run them against another server, set `PYNNTP_HOST`, `PYNNTP_PORT`,
 `PYNNTP_GROUPS` (groups the tests may post to); the docstring of
 `tests/integration/inn2/test_inn2.py` lists them all.
 
+## Fault-injection tests
+
+`tests/faults` runs pynntp against a fake server that splits, delays, drops
+and garbles its replies. These tests are opt-in and need Go; see
+[tests/faults/README.md](tests/faults/README.md).
+
 ## Docs
 
 ```sh
