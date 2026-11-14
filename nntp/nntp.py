@@ -87,13 +87,40 @@ class FromURLOptions(TypedDict, total=False):
     reader: bool
 
 
+def _split_url(url: str) -> tuple[urllib.parse.SplitResult, int | None]:
+    """Split a from_url() URL and read its port.
+
+    The errors of urlsplit() and of the port quote the netloc, which may hold
+    the password, so they are replaced here. The new errors are raised after
+    the except blocks, so the originals are not kept as __context__ either.
+    """
+    parts: urllib.parse.SplitResult | None
+    try:
+        parts = urllib.parse.urlsplit(url)
+    except ValueError:
+        parts = None
+    if parts is None:
+        raise ValueError("Invalid NNTP URL")
+
+    port: int | None = None
+    bad_port = False
+    try:
+        port = parts.port
+    except ValueError:
+        bad_port = True
+    if bad_port:
+        raise ValueError("Invalid NNTP URL port: not a number, or out of range")
+    return parts, port
+
+
 def _url_settings(parts: urllib.parse.SplitResult) -> FromURLOptions:
     """The constructor settings given by a from_url() URL."""
     query = urllib.parse.parse_qs(parts.query, keep_blank_values=True)
-    if unknown := set(query) - set(_URL_QUERY):
-        raise ValueError(f"Unsupported URL query parameter: {sorted(unknown)}")
-    if repeated := sorted(name for name, values in query.items() if len(values) > 1):
-        raise ValueError(f"Repeated URL query parameter: {repeated}")
+    if set(query) - set(_URL_QUERY):
+        allowed = ", ".join(_URL_QUERY)
+        raise ValueError(f"Unsupported URL query parameter; use only: {allowed}")
+    if any(len(values) > 1 for values in query.values()):
+        raise ValueError("Repeated URL query parameter; each may appear once")
 
     settings: FromURLOptions = {}
     if parts.username is not None:
@@ -118,7 +145,7 @@ def _url_timeout(value: str) -> float | None:
     else:
         if 0 < seconds < math.inf:  # Also rejects nan
             return seconds
-    raise ValueError(f"Invalid URL timeout: {value!r}")
+    raise ValueError('Invalid URL timeout: use seconds above 0, or "none"')
 
 
 def _url_bool(name: str, value: str) -> bool:
@@ -126,7 +153,7 @@ def _url_bool(name: str, value: str) -> bool:
         return True
     if value.lower() in _URL_FALSE:
         return False
-    raise ValueError(f"Invalid URL {name}: {value!r}")
+    raise ValueError(f"Invalid URL {name}: use true or false")
 
 
 # RFC 3977 section 3.2: a status code is three digits, the first 1-5
@@ -866,23 +893,25 @@ class NNTPClient(BaseNNTPClient):
 
         Raises:
             ValueError: If the URL is not valid for NNTP: one that cannot be
-                parsed, an unknown scheme or query parameter, a repeated
-                parameter, a path or fragment, no host, or a bad port, timeout
-                or reader value. The message never includes the URL, which may
-                hold a password.
+                parsed, an unknown scheme, query parameter or repeated
+                parameter, a user info that is not percent-encoded, a path or
+                fragment, no host, or a bad port, timeout or reader value. The
+                message never includes the password or other parts of the URL.
         """
-        try:
-            parts = urllib.parse.urlsplit(url)
-        except ValueError:  # Its message quotes the netloc, which has the password
-            raise ValueError("Invalid NNTP URL") from None
+        parts, port = _split_url(url)
         scheme = parts.scheme.lower()
         if scheme not in _URL_SCHEMES:
-            raise ValueError(f"Unsupported URL scheme: {parts.scheme!r}")
+            schemes = ", ".join(_URL_SCHEMES)
+            raise ValueError(f"Unsupported URL scheme; use one of: {schemes}")
+        # An "@" after "?", "/" or "#" means the user info was not percent-encoded
+        # and may hold the password, so it is not shown
+        if any("@" in part for part in (parts.query, parts.path, parts.fragment)):
+            raise ValueError("Invalid NNTP URL: user info must be percent-encoded")
         if not parts.hostname:
             raise ValueError("NNTP URL has no host")
         if parts.path not in ("", "/") or parts.fragment:
             raise ValueError("NNTP URL may not have a path or fragment")
-        if parts.port == 0:  # Accessing port raises ValueError if it is invalid
+        if port == 0:
             raise ValueError("NNTP URL port may not be 0")
 
         # The options override the URL; anything set by neither is left to the
@@ -893,7 +922,7 @@ class NNTPClient(BaseNNTPClient):
         use_ssl, ssl_mode = _URL_SCHEMES[scheme]
         return cls(
             parts.hostname,
-            parts.port,
+            port,
             use_ssl=use_ssl,
             ssl_mode=ssl_mode,
             **settings,

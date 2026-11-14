@@ -206,12 +206,22 @@ def test_url_is_validated_even_when_overridden(init_args: dict[str, Any]) -> Non
         "nntps://fred:s3cret@h?timeout=1&timeout=2",
         "nntps://fred:s3cret@h?nope=1",
         "nntps://fred:s3cret@h?timeout=abc",
+        "nntps://fred:s3cret",  # No "@": the password is taken as the port
+        "nntps://fred:s3cret/",
+        "nntps://fred:s3c?ret@news.example.com",  # Unencoded "?" ends the netloc
+        "nntps://fred:123?s3cret@news.example.com",  # ...and so does this
+        "nntps://fred:1?timeout=s3cret@h",
+        "nntps://fred:1?reader=s3cret@h",
+        "fred:s3cret@news.example.com",  # No scheme: the user name is taken as one
     ],
 )
 def test_errors_never_show_the_password(init_args: dict[str, Any], url: str) -> None:
     with pytest.raises(ValueError) as info:  # noqa: PT011
         nntp.NNTPClient.from_url(url)
-    assert "s3cret" not in str(info.value)
+    assert "s3c" not in str(info.value)
+    assert "fred" not in str(info.value)
+    assert info.value.__context__ is None
+    assert info.value.__cause__ is None
     assert init_args == {}
 
 
@@ -233,5 +243,5 @@ def test_unparsable_urls_are_not_chained(init_args: dict[str, Any], url: str) ->
     assert "fred" not in str(info.value)
     assert "s3cr" not in str(info.value)
     assert info.value.__cause__ is None
-    assert info.value.__suppress_context__
+    assert info.value.__context__ is None
     assert init_args == {}
