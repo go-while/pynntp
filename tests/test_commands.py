@@ -10,7 +10,7 @@ import pytest
 import nntp
 from nntp.headerdict import HeaderDict
 from nntp.types import Newsgroup, SSLMode
-from tests.helpers import LIST, MODE_READER, WELCOME, Connect
+from tests.helpers import DATE, LIST, MODE_READER, WELCOME, Connect
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -313,6 +313,25 @@ def test_listgroup_non_positive_number(connect: Connect, number: bytes) -> None:
     client, _ = connect(WELCOME + MODE_READER + server)
     with pytest.raises(nntp.NNTPDataError, match="Invalid LISTGROUP line"):
         list(client.listgroup("g"))
+
+
+@pytest.mark.parametrize(
+    "number",
+    [b"-1", b"+3", b"1_0", b" 7", b"7 ", b"\xd9\xa1"],  # last: ARABIC-INDIC ONE
+)
+def test_listgroup_number_not_ascii_digits(connect: Connect, number: bytes) -> None:
+    server = b"211 3 1 3 g\r\n1\r\n" + number + b"\r\n3\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    with pytest.raises(nntp.NNTPDataError, match="Invalid LISTGROUP line"):
+        list(client.listgroup("g"))
+    # The rest of the listing is unread, as for any other bad row
+    with pytest.raises(nntp.NNTPSyncError, match="reconnect"):
+        client.date()
+
+
+def test_listgroup_leading_zeros(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER + b"211 2 1 10 g\r\n007\r\n010\r\n.\r\n")
+    assert list(client.listgroup("g")) == [7, 10]
 
 
 def test_xhdr_by_message_id_legacy_rows(connect: Connect) -> None:

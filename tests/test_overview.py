@@ -98,6 +98,27 @@ def test_xover_bad_line(connect: Connect) -> None:
 
 
 @pytest.mark.parametrize(
+    "row",
+    [b"-1\ts\tf", b"+1\ts\tf", b"1_0\ts\tf", b" 1\ts\tf", b"\xd9\xa1\ts\tf"],
+)
+def test_xover_article_number_not_ascii_digits(connect: Connect, row: bytes) -> None:
+    server = OVERVIEW_FMT + b"224 ok\r\n" + row + b"\r\n2\ts\tf\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    with pytest.raises(nntp.NNTPDataError, match="Invalid XOVER response"):
+        list(client.xover())
+    # The rest of the listing is unread, as for any other bad row
+    with pytest.raises(nntp.NNTPSyncError, match="reconnect"):
+        client.date()
+
+
+def test_xover_leading_zeros(connect: Connect) -> None:
+    client, _ = connect(
+        WELCOME + MODE_READER + OVERVIEW_FMT + b"224 ok\r\n007\ts\tf\r\n.\r\n"
+    )
+    assert list(client.xover()) == [(7, HeaderDict({"subject": "s", "from": "f"}))]
+
+
+@pytest.mark.parametrize(
     ("arg", "sent"), [((1, 2), b"OVER 1-2"), ("<a@b>", b"OVER <a@b>"), (None, b"OVER")]
 )
 def test_over(connect: Connect, arg: object, sent: bytes) -> None:
