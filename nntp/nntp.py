@@ -218,6 +218,18 @@ def _article_number(text: str) -> int:
     return int(text)
 
 
+def _item_lines(item: bytes) -> Iterator[bytes]:
+    """Split one item of a body iterable into lines.
+
+    An item may hold several LF-terminated lines. An empty item is one empty
+    line, and an item without LF ends its line at its end.
+    """
+    if item:
+        yield from io.BytesIO(item)
+    else:
+        yield item
+
+
 def _inflate(inflate: _Decompress, data: bytes) -> bytes:
     """Decompress at most _INFLATE_SIZE bytes of output.
 
@@ -1952,7 +1964,8 @@ class NNTPClient(BaseNNTPClient):
         Args:
             headers: The article headers.
             body: The body as str, bytes, or an iterable of byte lines such as a
-                binary file.
+                binary file. Each item ends a line, and items are split at LF,
+                so an item may hold several lines.
 
         Returns:
             The message-id if it is the first reply token or follows INN's
@@ -1962,8 +1975,8 @@ class NNTPClient(BaseNNTPClient):
         Raises:
             ValueError: If a header name or value is invalid (see
                 utils.unparse_headers). Nothing is sent to the server.
-            NNTPDataError: If a body line contains CR or NUL, which NNTP cannot
-                carry. Nothing is sent.
+            NNTPDataError: If a body line contains a NUL, or a CR that is not part
+                of a CRLF line ending, which NNTP cannot carry. Nothing is sent.
             NNTPReplyError: If posting is not allowed or fails.
         """
         # Validate headers before starting the POST, so a bad header can't
@@ -2004,7 +2017,8 @@ class NNTPClient(BaseNNTPClient):
             NNTPTemporaryError: If the server doesn't take the article; its
                 code is 435 (not wanted), 436 (try again later) or 437
                 (rejected).
-            NNTPDataError: If a body line contains CR or NUL, as for post().
+            NNTPDataError: If a body line contains a NUL, or a CR that is not
+                part of a CRLF line ending, as for post().
                 Nothing is sent.
         """
         if not _MESSAGE_ID_RE.fullmatch(message_id):
@@ -2052,25 +2066,33 @@ class NNTPClient(BaseNNTPClient):
     ) -> Iterator[IO[bytes]]:
         """Build the article on the wire: CRLF lines, dot-stuffed, then ".".
 
-        Header lines are stuffed too: a header name may start with ".".
+        Header lines are stuffed too: a header name may start with ".". Each
+        item of a body iterable ends a line, and items are split at LF, so an
+        item may hold several lines; an item without LF ends its line at its
+        end.
 
         Raises:
-            NNTPDataError: If a body line contains CR or NUL.
+            NNTPDataError: If a body line contains a NUL, or a CR that is not
+                part of a CRLF line ending.
         """
         if isinstance(body, str):
             body = body.encode(self.encoding, self.errors)
         if isinstance(body, bytes):
-            body = io.BytesIO(body)
+            lines: Iterable[bytes] = io.BytesIO(body)
+        else:
+            lines = itertools.chain.from_iterable(map(_item_lines, body))
         head = io.BytesIO(hdrs.encode(self.encoding, self.errors))
 
         with tempfile.SpooledTemporaryFile(max_size=_SPOOL_SIZE) as article:
-            for line in itertools.chain(head, body):
+            for line in itertools.chain(head, lines):
                 if line.startswith(b"."):
                     line = b"." + line
                 if line.endswith(b"\n"):
                     line = line[:-1].removesuffix(b"\r")
                 if b"\0" in line or b"\r" in line:
-                    raise NNTPDataError("Body line contains CR or NUL")
+                    raise NNTPDataError(
+                        "Body line contains a CR outside a CRLF ending, or a NUL"
+                    )
                 article.write(line + b"\r\n")
             article.write(b".\r\n")
             article.seek(0)
