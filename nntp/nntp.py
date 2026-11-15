@@ -1803,7 +1803,8 @@ class NNTPClient(BaseNNTPClient):
         Args:
             headers: The article headers.
             body: The body as str, bytes, or an iterable of byte lines such as a
-                binary file. An item may also hold several lines.
+                binary file. Each item ends a line, and items are split at LF,
+                so an item may hold several lines.
 
         Returns:
             The message-id if the server's reply includes one (common, though not
@@ -1812,8 +1813,8 @@ class NNTPClient(BaseNNTPClient):
         Raises:
             ValueError: If a header name or value is invalid (see
                 utils.unparse_headers). Nothing is sent to the server.
-            NNTPDataError: If a body line contains CR or NUL, which NNTP cannot
-                carry. Nothing is sent.
+            NNTPDataError: If a body line contains a NUL, or a CR that is not part
+                of a CRLF line ending, which NNTP cannot carry. Nothing is sent.
             NNTPReplyError: If posting is not allowed or fails.
         """
         # Validate headers before starting the POST, so a bad header can't
@@ -1850,7 +1851,8 @@ class NNTPClient(BaseNNTPClient):
             NNTPTemporaryError: If the server doesn't take the article; its
                 code is 435 (not wanted), 436 (try again later) or 437
                 (rejected).
-            NNTPDataError: If a body line contains CR or NUL, as for post().
+            NNTPDataError: If a body line contains a NUL, or a CR that is not
+                part of a CRLF line ending, as for post().
                 Nothing is sent.
         """
         if not _MESSAGE_ID_RE.fullmatch(message_id):
@@ -1899,10 +1901,13 @@ class NNTPClient(BaseNNTPClient):
         """Build the article on the wire: CRLF lines, dot-stuffed, then ".".
 
         Header lines are stuffed too: a header name may start with ".". Each
-        item of a body iterable may hold several lines.
+        item of a body iterable ends a line, and items are split at LF, so an
+        item may hold several lines; an item without LF ends its line at its
+        end.
 
         Raises:
-            NNTPDataError: If a body line contains CR or NUL.
+            NNTPDataError: If a body line contains a NUL, or a CR that is not
+                part of a CRLF line ending.
         """
         if isinstance(body, str):
             body = body.encode(self.encoding, self.errors)
@@ -1919,7 +1924,9 @@ class NNTPClient(BaseNNTPClient):
                 if line.endswith(b"\n"):
                     line = line[:-1].removesuffix(b"\r")
                 if b"\0" in line or b"\r" in line:
-                    raise NNTPDataError("Body line contains CR or NUL")
+                    raise NNTPDataError(
+                        "Body line contains a CR outside a CRLF ending, or a NUL"
+                    )
                 article.write(line + b"\r\n")
             article.write(b".\r\n")
             article.seek(0)

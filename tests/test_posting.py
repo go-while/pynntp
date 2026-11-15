@@ -60,9 +60,29 @@ def test_post_bad_header_sends_nothing(connect: Connect) -> None:
 def test_post_illegal_chars_sends_nothing(connect: Connect, body: bytes) -> None:
     client, sock = connect(WELCOME + MODE_READER + DATE)
     sock.sent = b""
-    with pytest.raises(nntp.NNTPDataError, match="CR or NUL"):
+    with pytest.raises(nntp.NNTPDataError, match="CR outside a CRLF ending, or a NUL"):
         client.post({"Subject": "hi"}, body)
     assert sock.sent == b""  # Not even POST: no half-posted article
+    assert client.date().year == 2024
+
+
+@pytest.mark.parametrize(
+    "items",
+    [
+        [b"x\ny\rz\n"],  # CR inside a line, after the LF split
+        [b"x\n\0\n"],  # NUL on a later line of an item
+        [b"x\n", b"a\rb"],  # CR in a later item
+        [b"x\r"],  # CR at the end of an item, with no LF
+    ],
+)
+def test_post_iterable_illegal_chars_sends_nothing(
+    connect: Connect, items: list[bytes]
+) -> None:
+    client, sock = connect(WELCOME + MODE_READER + DATE)
+    sock.sent = b""
+    with pytest.raises(nntp.NNTPDataError, match="CR outside a CRLF ending, or a NUL"):
+        client.post({"Subject": "hi"}, items)
+    assert sock.sent == b""
     assert client.date().year == 2024
 
 
