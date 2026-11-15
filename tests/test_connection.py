@@ -22,6 +22,7 @@ from tests.helpers import (
     ODD,
     OVERVIEW_FMT,
     WELCOME,
+    XFEATURE_OK,
     Connect,
     FakeSocket,
     deflated,
@@ -232,9 +233,21 @@ def test_reconnect_socket_error_stays_broken(
     assert client.date().year == 2024
 
 
+def test_reconnect_resets_gzip_marker(connect: Connect) -> None:
+    new = b"222 1 <a@b> article follows COMPRESS=GZIP\r\nline\r\n.\r\n" + DATE
+    client, _ = connect(
+        WELCOME + MODE_READER + XFEATURE_OK, WELCOME + MODE_READER + new
+    )
+    client.xfeature_compress_gzip()
+    client.reconnect()
+    assert client.body(1) == b"line\r\n"  # XFEATURE is off on the new connection
+    assert client.date().year == 2024
+
+
 def test_decompression_error_part_way_breaks_connection(connect: Connect) -> None:
     server = b"215 list COMPRESS=GZIP\r\n" + b"not gzip data" + b".\r\n" + DATE
-    client, _ = connect(WELCOME + MODE_READER + server)
+    client, _ = connect(WELCOME + MODE_READER + XFEATURE_OK + server)
+    client.xfeature_compress_gzip()
     with pytest.raises(nntp.NNTPDataError, match="Decompression failed"):
         list(client.list("ACTIVE"))
     with pytest.raises(NNTPSyncError, match="reconnect"):

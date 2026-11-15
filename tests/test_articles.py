@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import zlib
 
 import pytest
@@ -12,6 +13,7 @@ from tests.helpers import (
     MODE_READER,
     PLAIN,
     WELCOME,
+    XFEATURE_OK,
     Connect,
     dot_stuff,
     yenc_body,
@@ -270,3 +272,51 @@ def test_article_yenc_subject_plain_body(connect: Connect) -> None:
     article = b"220 1 <a@b>\r\nSubject: file yEnc (1/1)\r\n\r\nplain text\r\n.\r\n"
     client, _ = connect(WELCOME + MODE_READER + article)
     assert client.article(1)[2] == b"plain text\r\n"  # Detected from the body only
+
+
+@pytest.mark.parametrize("xfeature", [False, True], ids=["no-xfeature", "xfeature"])
+def test_body_message_id_with_gzip_marker_is_plain(
+    connect: Connect, xfeature: bool
+) -> None:
+    # The status line echoes the message-id, and "=" is legal in one
+    server = b"222 <COMPRESS=GZIP@x> article follows\r\nline\r\n.\r\n" + DATE
+    head = WELCOME + MODE_READER + (XFEATURE_OK if xfeature else b"")
+    client, _ = connect(head + server)
+    if xfeature:
+        client.xfeature_compress_gzip()
+    assert client.body("<COMPRESS=GZIP@x>") == b"line\r\n"
+    assert client.date().year == 2024
+
+
+def test_gzip_marker_without_xfeature_is_plain(connect: Connect) -> None:
+    server = b"222 1 <a@b> article follows COMPRESS=GZIP\r\nline\r\n.\r\n" + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
+    assert client.body(1) == b"line\r\n"
+    assert client.date().year == 2024
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        b"222 COMPRESS=GZIP article follows",
+        b"222 <a@b> [COMPRESS=GZIP] follows",
+        b"222 <COMPRESS=GZIP@x> article follows",
+    ],
+)
+def test_gzip_marker_not_last_is_plain(connect: Connect, status: bytes) -> None:
+    server = XFEATURE_OK + status + b"\r\nline\r\n.\r\n" + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
+    client.xfeature_compress_gzip()
+    assert client.body(1) == b"line\r\n"
+    assert client.date().year == 2024
+
+
+@pytest.mark.parametrize("marker", [b"COMPRESS=GZIP", b"[COMPRESS=GZIP]"])
+def test_gzip_marker_last_selects_gzip(connect: Connect, marker: bytes) -> None:
+    payload = gzip.compress(b"line\r\n") + b".\r\n"
+    status = b"222 <a@b> article follows " + marker + b"\r\n"
+    server = XFEATURE_OK + status + payload + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
+    client.xfeature_compress_gzip()
+    assert client.body(1) == b"line\r\n"
+    assert client.date().year == 2024

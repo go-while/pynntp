@@ -165,6 +165,8 @@ def sent_after_compress(sock: FakeSocket) -> bytes:
 
 COMPRESS_OK = b"206 Compression active\r\n"
 
+XFEATURE_OK = b"290 feature enabled\r\n"  # Reply to XFEATURE COMPRESS GZIP
+
 
 ODD = b"299 unexpected\r\n"  # A success code no command expects
 

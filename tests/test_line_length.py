@@ -12,6 +12,7 @@ from tests.helpers import (
     DATE,
     MODE_READER,
     WELCOME,
+    XFEATURE_OK,
     Connect,
     FakeSocket,
     deflated,
@@ -41,6 +42,8 @@ def respond(kind: str, payload: bytes) -> bytes:
         response = yenczlib(b"224", payload)
     else:
         response = b"224 ok\r\n" + payload + b".\r\n"
+    if kind.startswith("gzip"):
+        response = XFEATURE_OK + response  # The reply to XFEATURE, sent first
     if kind == "deflate":
         return COMPRESS_OK + deflated(response, DATE)
     return response + DATE
@@ -49,6 +52,8 @@ def respond(kind: str, payload: bytes) -> bytes:
 def read_response(client: nntp.NNTPClient, kind: str) -> str:
     if kind == "deflate":
         client.compress()
+    elif kind.startswith("gzip"):
+        client.xfeature_compress_gzip(terminator=kind == "gzip-terminator")
     code, message = client.command("XOVER")
     return "".join(client.info(code, message, yz=kind == "xz"))
 
