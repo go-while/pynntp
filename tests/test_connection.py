@@ -25,8 +25,8 @@ from tests.helpers import (
     XFEATURE_OK,
     Connect,
     FakeSocket,
-    deflated,
     Packets,
+    deflated,
 )
 
 if TYPE_CHECKING:
