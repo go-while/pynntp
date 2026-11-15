@@ -412,6 +412,16 @@ def test_unexpected_202_reply_is_read(connect: Connect) -> None:
     assert client.date().year == 2024  # Not 1999 from the unread block
 
 
+def test_unexpected_218_reply_is_read(connect: Connect) -> None:
+    # 218 (XINDEX, RFC 2980 2.7) is followed by a block ending with a period
+    server = b"218 index follows\r\n111 19990101000000\r\n.\r\n" + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPReplyError) as info:
+        client.command("LIST", expect=215)
+    assert info.value.code == 218
+    assert client.date().year == 2024  # Not 1999 from the unread block
+
+
 def test_unexpected_multiline_final_post_reply_is_read(connect: Connect) -> None:
     server = b"340 send\r\n" + b"220 0 <a@b>\r\n111 19990101000000\r\n.\r\n" + DATE
     client, _ = connect(WELCOME + MODE_READER + server)

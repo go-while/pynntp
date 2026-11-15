@@ -134,9 +134,12 @@ _STATUS_CODE_RE = re.compile(rb"[1-5][0-9]{2}")
 
 _DIGITS_RE = re.compile(r"[0-9]+")
 
-# RFC 3977 3.4.1 (and 2980 for 282; 202 is LIST EXTENSIONS): replies followed by
-# a multi-line block. 211 is left out: it is multi-line only for LISTGROUP.
-_MULTILINE = frozenset({100, 101, 202, 215, 220, 221, 222, 224, 225, 230, 231, 282})
+# RFC 3977 3.4.1 (and 2980 for 218 and 282; 202 is LIST EXTENSIONS): replies
+# followed by a multi-line block. 211 is left out: it is multi-line only for
+# LISTGROUP. 288 (XTHREAD, RFC 2980 2.12) is left out: its data is not framed.
+_MULTILINE = frozenset(
+    {100, 101, 202, 215, 218, 220, 221, 222, 224, 225, 230, 231, 282}
+)
 
 _MAX_COMMAND = 512  # RFC 3977 3.1: command line length, including CRLF
 _MAX_LINE = 0x10000  # Default max_line_length: a response line, including CRLF
@@ -643,8 +646,10 @@ class BaseNNTPClient:
         multi-line block (e.g. LIST, 215) leaves the block unread, and the next
         response read would take its lines as status lines. Use the method for
         that command (list(), over(), ...), or pass the returned code and
-        message to info(). A block after a reply that is not one of expect is
-        read (see _unexpected).
+        message to info(). A reply that is not one of expect is handled by
+        _unexpected: its block is read first only if the code is multi-line
+        (in _MULTILINE, e.g. 202 and 215); for any other code nothing more is
+        read.
 
         Args:
             verb: The command.
@@ -661,8 +666,9 @@ class BaseNNTPClient:
             NNTPSyncError: If a response is still being read, or the connection
                 is closed or out of sync.
             NNTPReplyError: If authentication fails, or the reply is not one
-                of expect. A multi-line block after such a reply is read
-                first, so the connection stays in sync.
+                of expect. For a multi-line code (in _MULTILINE) the block is
+                read first, so the connection stays in sync; for other codes
+                no block is read.
             NNTPTemporaryError: For status codes 400-499.
             NNTPPermanentError: For status codes 500-599.
             NNTPProtocolError: If the status line can't be parsed.
