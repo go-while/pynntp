@@ -589,7 +589,7 @@ def test_login_unencodable_sends_nothing(
     and neither the error nor its context holds the secret."""
     client, sock = connect(WELCOME + MODE_READER + DATE)
     sock.sent = b""
-    with pytest.raises(ValueError, match="can't be encoded") as info:
+    with pytest.raises(ValueError, match="can't encode") as info:
         client.login(username, password)
     assert sock.sent == b""
     assert "S3cret" not in repr(info.value)
@@ -603,11 +603,44 @@ def test_command_authinfo_unencodable_hides_password(connect: Connect) -> None:
     client, sock = connect(WELCOME + MODE_READER + DATE)
     sock.sent = b""
     with pytest.raises(
-        ValueError, match=r"AUTHINFO PASS \.\.\.' can't be encoded"
+        ValueError, match=r"utf-8 can't encode: 'AUTHINFO PASS \.\.\.'"
     ) as info:
         client.command("AUTHINFO PASS", "S3cret\ud800")
     assert sock.sent == b""
     assert "S3cret" not in repr(info.value)
+    assert info.value.__context__ is None
+    assert client.date().year == 2024
+
+
+@pytest.mark.parametrize(
+    ("verb", "args"),
+    [
+        ("authinfo pass", "S3cret\ud800"),
+        ("AuthInfo Pass", "S3cret\ud800"),
+        ("authinfo pass S3cret\ud800", None),
+    ],
+)
+def test_command_authinfo_lowercase_unencodable_hides_password(
+    connect: Connect, verb: str, args: str | None
+) -> None:
+    client, sock = connect(WELCOME + MODE_READER + DATE)
+    sock.sent = b""
+    with pytest.raises(ValueError, match="can't encode") as info:
+        client.command(verb, args)
+    assert sock.sent == b""
+    assert "S3cret" not in repr(info.value)
+    assert "S3cret" not in str(info.value)
+    assert info.value.__context__ is None
+    assert client.date().year == 2024
+
+
+def test_command_unencodable_raises(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + DATE)
+    sock.sent = b""
+    with pytest.raises(ValueError, match="can't encode") as info:
+        client.command("GROUP", "alt.\ud800")
+    assert sock.sent == b""
+    assert str(info.value).endswith("utf-8 can't encode: 'GROUP alt.\\ud800'")
     assert info.value.__context__ is None
     assert client.date().year == 2024
 
@@ -618,7 +651,7 @@ def test_480_login_unencodable_sends_nothing(connect: Connect) -> None:
         WELCOME + MODE_READER + b"480 auth\r\n", username="u", password="S3cret\ud800"
     )
     sock.sent = b""
-    with pytest.raises(ValueError, match="can't be encoded") as info:
+    with pytest.raises(ValueError, match="can't encode") as info:
         client.date()
     assert sock.sent == b"DATE\r\n"
     assert "S3cret" not in repr(info.value)
@@ -628,7 +661,7 @@ def test_480_login_unencodable_sends_nothing(connect: Connect) -> None:
 def test_constructor_login_unencodable_hides_password(connect: Connect) -> None:
     """Credentials given to the constructor take the same path: the 480 on
     MODE READER leads to a login that raises before AUTHINFO is sent."""
-    with pytest.raises(ValueError, match="can't be encoded") as info:
+    with pytest.raises(ValueError, match="can't encode") as info:
         connect(WELCOME + b"480 auth\r\n", username="u", password="S3cret\ud800")
     assert FakeSocket.last.sent == b"MODE READER\r\n"
     assert FakeSocket.last.closed

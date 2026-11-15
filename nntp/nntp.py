@@ -686,7 +686,9 @@ class BaseNNTPClient:
             return line.encode(self.encoding, self.errors)
         except UnicodeEncodeError:
             pass
-        raise ValueError(f"{shown!r} can't be encoded with {self.encoding}") from None
+        raise ValueError(
+            f"Command has a character that {self.encoding} can't encode: {shown!r}"
+        ) from None
 
     def _command(
         self, verb: str, args: str | None, *, login: bool = True
@@ -774,7 +776,7 @@ class BaseNNTPClient:
         if any(c in username + password for c in "\r\n\0"):
             raise ValueError("Username or password contains CR, LF or NUL")
         for verb, value in (("AUTHINFO USER", username), ("AUTHINFO PASS", password)):
-            line = self._encode_line(f"{verb} {value}\r\n", verb)
+            line = self._encode_line(f"{verb} {value}\r\n", f"{verb} ...")
             if len(line) > _MAX_COMMAND:
                 raise ValueError(f"{verb} would be longer than {_MAX_COMMAND} octets")
         self.username, self.password = username, password
