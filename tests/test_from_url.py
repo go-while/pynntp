@@ -77,6 +77,8 @@ def test_schemes(
         ("nntp://fred:pw@h", {"password": "kpw"}, ("fred", "kpw")),
         ("nntp://fred@h", {"username": "k", "password": "kpw"}, ("k", "kpw")),
         ("nntp://fred:pw@h", {"username": "", "password": ""}, ("", "")),
+        # UTF-8 escapes decode to the text that login() encodes back
+        ("nntp://f%C3%A9:p%C3%A4%E2%82%AC@h", {}, ("fé", "pä€")),
     ],
 )
 def test_credentials(
@@ -144,6 +146,35 @@ def test_connects_and_logs_in(monkeypatch: pytest.MonkeyPatch) -> None:
     assert addresses == [("example.com", 1119)]
     assert client.date().year == 2024
     assert b"AUTHINFO USER fred\r\nAUTHINFO PASS p@ss\r\n" in sock.sent
+
+
+def test_non_utf8_escapes_reach_the_wire_as_their_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # %E9 is not valid UTF-8; login() sends it back as the byte 0xE9, not U+FFFD
+    server = WELCOME + b"480 auth\r\n381 pass\r\n281 ok\r\n"
+    sock = FakeSocket(server, 4096)
+    monkeypatch.setattr("nntp.nntp.socket.create_connection", lambda *_, **__: sock)
+    nntp.NNTPClient.from_url("nntp://f%E9d:p%E9ss%C3%A9@example.com")
+    assert b"AUTHINFO USER f\xe9d\r\nAUTHINFO PASS p\xe9ss\xc3\xa9\r\n" in sock.sent
+
+
+def test_undecodable_user_info_error_does_not_show_it(
+    init_args: dict[str, Any],
+) -> None:
+    # A client whose errors are "strict" cannot decode %E9%E9; the error must
+    # not carry those bytes (UnicodeDecodeError's repr holds them)
+    class Strict(nntp.NNTPClient):
+        errors = "strict"
+
+    # The exact message: no bytes, no user name, no password
+    with pytest.raises(
+        ValueError, match=r"^Invalid NNTP URL user info: not decodable as utf-8$"
+    ) as info:
+        Strict.from_url("nntp://fred:%E9%E9@h")
+    assert info.value.__context__ is None
+    assert info.value.__cause__ is None
+    assert init_args == {}
 
 
 def test_accepts_every_constructor_argument_not_in_the_url() -> None:
