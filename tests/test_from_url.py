@@ -167,10 +167,11 @@ def test_undecodable_user_info_error_does_not_show_it(
     class Strict(nntp.NNTPClient):
         errors = "strict"
 
-    with pytest.raises(ValueError) as info:  # noqa: PT011
+    # The exact message: no bytes, no user name, no password
+    with pytest.raises(
+        ValueError, match=r"^Invalid NNTP URL user info: not decodable as utf-8$"
+    ) as info:
         Strict.from_url("nntp://fred:%E9%E9@h")
-    assert "\\xe9" not in repr(info.value)
-    assert "fred" not in str(info.value)
     assert info.value.__context__ is None
     assert info.value.__cause__ is None
     assert init_args == {}

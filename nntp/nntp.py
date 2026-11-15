@@ -125,7 +125,7 @@ def _unquote_user_info(value: str, encoding: str, errors: str) -> str:
     """
     try:
         return urllib.parse.unquote(value, encoding=encoding, errors=errors)
-    except UnicodeDecodeError:
+    except UnicodeError:
         pass
     # Raised after the except block, so the decode error is not kept as
     # __context__: its repr holds the bytes of the user info
@@ -903,9 +903,10 @@ class NNTPClient(BaseNNTPClient):
         (seconds, or "none") and reader ("true"/"false", "1"/"0", "yes"/"no" or
         "on"/"off").
 
-        A %XX escape in the user info is one byte, decoded with the client's
-        encoding (UTF-8 by default), so a byte that is not UTF-8 can be given
-        as %XX and is sent unchanged.
+        The user info is percent-decoded with the client's encoding and errors
+        (UTF-8 and surrogateescape by default). With surrogateescape a byte
+        that is not valid in the encoding, such as %E9 in UTF-8, is sent
+        unchanged; with strict errors such user info raises ValueError.
 
         Keyword arguments override the URL, and the constructor's defaults
         apply to anything set by neither. Passing the password as an argument
