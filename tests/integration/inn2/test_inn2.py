@@ -518,7 +518,8 @@ def test_compress(ssl_mode: SSLMode | None) -> None:
     with client(
         use_ssl=ssl_mode is not None,
         ssl_mode=ssl_mode or SSLMode.IMPLICIT,
-        ssl_context=tls_context(),
+        # ssl_context needs use_ssl=True
+        ssl_context=tls_context() if ssl_mode is not None else None,
     ) as nntp_client:
         compress(nntp_client)
         assert "COMPRESS DEFLATE" not in list(nntp_client.capabilities())
@@ -596,8 +597,10 @@ def test_from_url(scheme: str) -> None:
             pytest.skip("PYNNTP_TLS_PORT=0: no implicit TLS")
         port = TLS_PORT
     url = f"{scheme}://{HOST}:{port}"
+    # ssl_context is refused for a plain-text nntp:// URL
+    context = None if scheme == "nntp" else tls_context()
     with nntp.NNTPClient.from_url(
-        url, username=USER, password=PASSWORD, ssl_context=tls_context()
+        url, username=USER, password=PASSWORD, ssl_context=context
     ) as nntp_client:
         check_newsgroups(nntp_client)
 
