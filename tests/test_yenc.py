@@ -103,8 +103,8 @@ def test_check_trailer() -> None:
         is None
     )
     assert check_trailer(b"=yend size=5", 5, crc, part=False) is None
-    # Leading zeros are fine, up to what int() accepts
-    long_size = b"=yend size=" + b"0" * 4000 + b"5"
+    # Leading zeros are fine (600 digits: under int()'s lowest allowed limit, 640)
+    long_size = b"=yend size=" + b"0" * 599 + b"5"
     assert check_trailer(long_size, 5, crc, part=False) is None
     assert check_trailer(b"=yend size=6", 5, crc, part=False) == (
         "decoded 5 bytes, trailer says 6"
