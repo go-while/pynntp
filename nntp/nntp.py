@@ -827,8 +827,9 @@ class BaseNNTPClient:
             The status code and message.
 
         Raises:
-            ValueError: If the command contains CR, LF or NUL, or is longer
-                than 512 octets. Nothing is sent.
+            ValueError: If the command contains CR, LF or NUL, is longer than
+                512 octets, or can't be encoded with the client's encoding.
+                Nothing is sent. For AUTHINFO the error omits the arguments.
             NNTPSyncError: If a response is still being read, or the connection
                 is closed or out of sync.
             NNTPReplyError: If authentication fails, or the reply is not one
@@ -853,6 +854,21 @@ class BaseNNTPClient:
                 pass
         raise NNTPReplyError(code, message)
 
+    def _encode_line(self, line: str, shown: str) -> bytes:
+        """Encode a command line, or raise ValueError naming only shown.
+
+        The UnicodeEncodeError holds the whole line, so its text (AUTHINFO
+        arguments included) is not passed on. The error is raised outside the
+        except block, so __context__ does not keep it either.
+        """
+        try:
+            return line.encode(self.encoding, self.errors)
+        except UnicodeEncodeError:
+            pass
+        raise ValueError(
+            f"Command has a character that {self.encoding} can't encode: {shown!r}"
+        ) from None
+
     def _command(
         self, verb: str, args: str | None, *, login: bool = True
     ) -> tuple[int, str]:
@@ -872,7 +888,7 @@ class BaseNNTPClient:
             raise ValueError(f"Command contains CR, LF or NUL: {shown!r}")
         if self._deflate is not None and _after_compress_forbidden(words):
             raise NNTPError(f"{words[0]} is not allowed after COMPRESS (RFC 8054)")
-        line = (cmd + "\r\n").encode(self.encoding, self.errors)
+        line = self._encode_line(cmd + "\r\n", shown)
         if len(line) > _MAX_COMMAND:
             raise ValueError(f"Command longer than {_MAX_COMMAND} octets: {shown!r}")
 
@@ -926,8 +942,9 @@ class BaseNNTPClient:
 
         Raises:
             ValueError: If there is no username, or a credential contains CR,
-                LF or NUL or makes its command longer than 512 octets. Nothing
-                is sent.
+                LF or NUL, makes its command longer than 512 octets, or can't be
+                encoded with the client's encoding. Nothing is sent, and the
+                message does not contain the credential.
             NNTPReplyError: If the login is rejected, or a password is asked
                 for and there is none.
         """
@@ -938,7 +955,7 @@ class BaseNNTPClient:
         if any(c in username + password for c in "\r\n\0"):
             raise ValueError("Username or password contains CR, LF or NUL")
         for verb, value in (("AUTHINFO USER", username), ("AUTHINFO PASS", password)):
-            line = f"{verb} {value}\r\n".encode(self.encoding, self.errors)
+            line = self._encode_line(f"{verb} {value}\r\n", f"{verb} ...")
             if len(line) > _MAX_COMMAND:
                 raise ValueError(f"{verb} would be longer than {_MAX_COMMAND} octets")
         self.username, self.password = username, password
