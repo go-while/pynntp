@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING
 from .headerdict import HeaderDict
 from .types import Newsgroup, Range
 
+_DIGITS_RE = re.compile(r"[0-9]+")
 # RFC 5322 field name: printable ASCII except ":".
 _HEADER_NAME_RE = re.compile(r"[!-9;-~]+")
 # A folded header value continues after a line break followed by whitespace.
@@ -104,17 +105,28 @@ def parse_newsgroup(line: str) -> Newsgroup:
         The newsgroup.
 
     Raises:
-        ValueError: If the line cannot be parsed.
+        ValueError: If the line cannot be parsed, or a high or low water
+            mark is not ASCII digits.
     """
     parts = line.split()
     try:
-        name = parts[0]
-        high = int(parts[1])
-        low = int(parts[2])
-        status = parts[3]
+        name, status = parts[0], parts[3]
+        high, low = _ascii_int(parts[1]), _ascii_int(parts[2])
     except (IndexError, ValueError) as e:
         raise ValueError("Invalid newsgroup info") from e
     return Newsgroup(name, low, high, status)
+
+
+def _ascii_int(text: str) -> int:
+    """Parse ASCII digits only: int() also takes signs, underscores and other digits.
+
+    Raises:
+        ValueError: If text is not ASCII digits, or has more digits than int()
+            accepts.
+    """
+    if not _DIGITS_RE.fullmatch(text):
+        raise ValueError(f"Not a number: {text!r}")
+    return int(text)
 
 
 def parse_active_time(line: str) -> tuple[str, datetime, str]:

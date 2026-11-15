@@ -102,7 +102,19 @@ def test_parse_newsgroup(line: str, expected: Newsgroup) -> None:
 
 
 @pytest.mark.parametrize(
-    "line", ["alt.test", "alt.test 10", "alt.test 10 20", "alt.test x 1 y"]
+    "line",
+    [
+        "alt.test",
+        "alt.test 10",
+        "alt.test 10 20",
+        "alt.test x 1 y",
+        # int() takes these, but they are not ASCII digits
+        "alt.test -5 10 y",
+        "alt.test +5 10 y",
+        "alt.test 1_0 10 y",
+        "alt.test 10 \N{ARABIC-INDIC DIGIT FIVE} y",  # ARABIC-INDIC DIGIT FIVE
+        "alt.test " + "1" * 4301 + " 10 y",  # More digits than int() accepts
+    ],
 )
 def test_parse_newsgroup_invalid(line: str) -> None:
     with pytest.raises(ValueError, match="Invalid newsgroup info"):

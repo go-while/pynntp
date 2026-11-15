@@ -72,6 +72,16 @@ def trailer_crc32(trailer: bytes, *, part: bool = False) -> int | None:
     return int(value, 16)
 
 
+def _size_value(value: str) -> int | None:
+    """The size keyword as an int, or None if it is not digits int() accepts."""
+    if not _DIGITS_RE.fullmatch(value):
+        return None
+    try:
+        return int(value)
+    except ValueError:  # More digits than int() accepts (4300 by default)
+        return None
+
+
 def check_trailer(trailer: bytes, size: int, crc32: int, *, part: bool) -> str | None:
     """Check decoded data against a =yend trailer.
 
@@ -88,9 +98,10 @@ def check_trailer(trailer: bytes, size: int, crc32: int, *, part: bool) -> str |
     """
     keywords = parse_keywords(trailer)
     expected_size = keywords.get("size", "")
-    if not _DIGITS_RE.fullmatch(expected_size):
+    expected = _size_value(expected_size)
+    if expected is None:
         return "trailer has no valid size"
-    if int(expected_size) != size:
+    if expected != size:
         return f"decoded {size} bytes, trailer says {expected_size}"
     if "part" in keywords and not _DIGITS_RE.fullmatch(keywords["part"]):
         return "trailer has an invalid part"

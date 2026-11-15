@@ -71,6 +71,17 @@ def test_next_bad_status(connect: Connect) -> None:
         client.next()
 
 
+@pytest.mark.parametrize("verb", ["stat", "next", "last"])
+def test_select_huge_number(connect: Connect, verb: str) -> None:
+    # Digits only, but more than int() accepts: a data error, still in sync
+    reply = b"223 " + b"1" * 4301 + b" <a@b>\r\n"
+    client, _ = connect(WELCOME + MODE_READER + reply + DATE)
+    args = (1,) if verb == "stat" else ()
+    with pytest.raises(nntp.NNTPDataError, match=f"Invalid {verb.upper()} status"):
+        getattr(client, verb)(*args)
+    assert client.date().year == 2024
+
+
 @pytest.mark.parametrize(("verb", "code"), [("hdr", b"225"), ("xhdr", b"221")])
 def test_hdr(connect: Connect, verb: str, code: bytes) -> None:
     server = code + b" ok\r\n1 hello\r\n2\r\n.\r\n"
