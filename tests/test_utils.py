@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime
 from io import StringIO
 from typing import TYPE_CHECKING
@@ -146,6 +147,18 @@ def test_parse_headers_fold_whitespace(
     assert parse_headers(StringIO(text)) == headers
     assert parse_headers(text.splitlines(keepends=True)) == headers
     assert parse_headers(text.splitlines()) == headers
+
+
+def test_parse_headers_many_continuation_lines() -> None:
+    # The client passes lines without their line endings
+    count = 500_000
+    limit = 3.0  # seconds
+    lines = ["X-Long: start", *[" x"] * count, "Other: y"]
+    start = time.perf_counter()
+    headers = parse_headers(lines)
+    elapsed = time.perf_counter() - start
+    assert headers == {"X-Long": "start" + " x" * count, "Other": "y"}
+    assert elapsed < limit  # Quadratic joining takes about 20 s here
 
 
 def test_parse_headers_value_with_colon() -> None:
