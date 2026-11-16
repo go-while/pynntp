@@ -1813,8 +1813,9 @@ class NNTPClient(BaseNNTPClient):
         Raises:
             ValueError: If a header name or value is invalid (see
                 utils.unparse_headers). Nothing is sent to the server.
-            NNTPDataError: If a body line contains a NUL, or a CR that is not part
-                of a CRLF line ending, which NNTP cannot carry. Nothing is sent.
+            NNTPDataError: If a line of the article (header or body) contains a
+                NUL, or a CR that is not part of a CRLF line ending, which NNTP
+                cannot carry. Nothing is sent.
             NNTPReplyError: If posting is not allowed or fails.
         """
         # Validate headers before starting the POST, so a bad header can't
@@ -1851,9 +1852,9 @@ class NNTPClient(BaseNNTPClient):
             NNTPTemporaryError: If the server doesn't take the article; its
                 code is 435 (not wanted), 436 (try again later) or 437
                 (rejected).
-            NNTPDataError: If a body line contains a NUL, or a CR that is not
-                part of a CRLF line ending, as for post().
-                Nothing is sent.
+            NNTPDataError: If a line of the article (header or body) contains a
+                NUL, or a CR that is not part of a CRLF line ending, as for
+                post(). Nothing is sent.
         """
         if not _MESSAGE_ID_RE.fullmatch(message_id):
             raise ValueError(f"Invalid message-id: {message_id!r}")
@@ -1906,8 +1907,8 @@ class NNTPClient(BaseNNTPClient):
         end.
 
         Raises:
-            NNTPDataError: If a body line contains a NUL, or a CR that is not
-                part of a CRLF line ending.
+            NNTPDataError: If a line of the article (header or body) contains a
+                NUL, or a CR that is not part of a CRLF line ending.
         """
         if isinstance(body, str):
             body = body.encode(self.encoding, self.errors)
@@ -1925,7 +1926,7 @@ class NNTPClient(BaseNNTPClient):
                     line = line[:-1].removesuffix(b"\r")
                 if b"\0" in line or b"\r" in line:
                     raise NNTPDataError(
-                        "Body line contains a CR outside a CRLF ending, or a NUL"
+                        "Article line contains a CR outside a CRLF ending, or a NUL"
                     )
                 article.write(line + b"\r\n")
             article.write(b".\r\n")
