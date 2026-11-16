@@ -178,6 +178,18 @@ def _msgid_article(msgid_article: str | int | None) -> str | None:
     return str(msgid_article)
 
 
+def _item_lines(item: bytes) -> Iterator[bytes]:
+    """Split one item of a body iterable into lines.
+
+    An item may hold several LF-terminated lines. An empty item is one empty
+    line, and an item without LF ends its line at its end.
+    """
+    if item:
+        yield from io.BytesIO(item)
+    else:
+        yield item
+
+
 def _inflate(inflate: _Decompress, data: bytes) -> bytes:
     """Decompress at most _INFLATE_SIZE bytes of output.
 
@@ -1887,7 +1899,9 @@ class NNTPClient(BaseNNTPClient):
         Args:
             headers: The article headers.
             body: The body as str, bytes, or an iterable of byte lines such as a
-                binary file.
+                binary file. Each item is one or more complete lines: items
+                are split at LF, and an item without LF still ends a line, so
+                pass lines, not arbitrary chunks.
 
         Returns:
             The message-id if it is the first reply token or follows INN's
@@ -1987,17 +2001,23 @@ class NNTPClient(BaseNNTPClient):
     ) -> Iterator[IO[bytes]]:
         """Build the article on the wire: headers, dot-stuffed CRLF body, ".".
 
+        Each item of a body iterable ends a line, and items are split at LF, so
+        an item may hold several lines; an item without LF ends its line at its
+        end.
+
         Raises:
             NNTPDataError: If a body line contains CR or NUL.
         """
         if isinstance(body, str):
             body = body.encode(self.encoding, self.errors)
         if isinstance(body, bytes):
-            body = io.BytesIO(body)
+            lines: Iterable[bytes] = io.BytesIO(body)
+        else:
+            lines = itertools.chain.from_iterable(map(_item_lines, body))
 
         with tempfile.SpooledTemporaryFile(max_size=_SPOOL_SIZE) as article:
             article.write(hdrs.encode(self.encoding, self.errors))
-            for line in body:
+            for line in lines:
                 if line.startswith(b"."):
                     line = b"." + line
                 if line.endswith(b"\n"):
