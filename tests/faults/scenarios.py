@@ -461,11 +461,6 @@ def store_over_check(v: Any) -> bool:  # noqa: ANN401
 # Open bugs: these scenarios fail on the current code
 
 
-UNREAD_DATA = (
-    "data the server sent after a reply is taken as the reply to the next command"
-)
-
-
 def article_parts(c: nntp.NNTPClient) -> object:
     number, headers, body = c.article(1, decode=False)
     return number, headers["Subject"], body
@@ -898,8 +893,6 @@ def leftover_scenarios() -> Iterator[Scenario]:
         ),
         RAW,
         probe=None,
-        known=UNREAD_DATA,
-        known_why="the second group() must not return",
     )
     yield Scenario(
         "leftover/status-after-terminator-same-packet",
@@ -911,8 +904,6 @@ def leftover_scenarios() -> Iterator[Scenario]:
         ),
         RAW,
         probe=None,
-        known=UNREAD_DATA,
-        known_why="date() must not return the unsolicited 2099 line",
     )
     yield Scenario(
         "leftover/extra-line-after-greeting",
@@ -924,8 +915,6 @@ def leftover_scenarios() -> Iterator[Scenario]:
         ),
         RAW,
         probe=None,
-        known=UNREAD_DATA,
-        known_why="date() must not return the 2099 line",
     )
     yield Scenario(
         "leftover/crlf-after-terminator",
@@ -1591,7 +1580,7 @@ def xzver_scenarios() -> Iterator[Scenario]:
             xz_payload([*rows[:-1], OVER_ROWS[-1]]),
             Ok(pred=over_check, desc="both rows, the last one without CRLF"),
             False,
-            "XZVER drops a last row that has no CRLF",
+            "",
         ),
         ("bad-crc", xz_payload(rows, crc=1), Err(nntp.NNTPDataError), False, ""),
         (
@@ -1633,15 +1622,11 @@ def xzver_scenarios() -> Iterator[Scenario]:
             "",
         ),
     ]
-    # What the current code gives: a decompression error, and only the first row
+    # What the current code gives: a decompression error
     known_why = {
         "sync-flushed-not-finished": (
             "expected a result, got NNTPDataError: "
             "Decompression failed: compressed data is truncated"
-        ),
-        "last-row-without-crlf": (
-            "('Xref', 'h alt.test:1')]))], expected both rows, the last one "
-            "without CRLF"
         ),
     }
     for name, lines, exp, slow, known in cases:
@@ -1742,7 +1727,7 @@ def yenc_scenarios() -> Iterator[Scenario]:
             [*block, b"=yend size=0"],
             Ok(data),
             None,
-            "a =yend line after a complete block raises NNTPYEncError",
+            "",
         ),
         (
             "decode-true-no-ybegin",
@@ -1752,12 +1737,7 @@ def yenc_scenarios() -> Iterator[Scenario]:
             "",
         ),
     ]
-    known_why = {
-        "stray-yend-after-block": (
-            "expected a result, got NNTPYEncError: "
-            "Bad yEnc data: decoded 1025 bytes, trailer says 0"
-        )
-    }
+    known_why: dict[str, str] = {}
     for name, lines, exp, decode, known in cases:
         yield Scenario(
             f"yenc/{name}",
@@ -2150,8 +2130,6 @@ def malformed_scenarios() -> Iterator[Scenario]:
         lambda c: c.group("g"),
         Err(nntp.NNTPDataError, state="sync"),
         RAW,
-        known="group() accepts negative numbers in the 211 reply",
-        known_why="expected NNTPDataError, got result",
     )
     yield Scenario(
         "malformed/stat-msgid-without-at",
@@ -2315,9 +2293,6 @@ def session_scenarios() -> Iterator[Scenario]:
             desc="the old iterator must not yield lines of the new connection",
         ),
         probe=None,
-        known="a response iterator resumed after reconnect() reads the new "
-        "connection's reply",
-        known_why="the old iterator must not yield lines of the new connection",
     )
 
 
