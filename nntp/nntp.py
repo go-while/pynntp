@@ -1492,6 +1492,8 @@ class NNTPClient(BaseNNTPClient):
                 continue
             decode_pending()
             if line.startswith(b"=ybegin "):
+                if open_block:  # The previous block never got its =yend
+                    error = error or "missing =yend trailer"
                 decoder, size, open_block, seen_block = YEnc(), 0, True, True
                 multipart = "part" in parse_keywords(line)
             elif open_block and line.startswith(b"=yend"):
