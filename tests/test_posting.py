@@ -81,9 +81,33 @@ def test_post_bad_header_sends_nothing(connect: Connect) -> None:
 def test_post_illegal_chars_sends_nothing(connect: Connect, body: bytes) -> None:
     client, sock = connect(WELCOME + MODE_READER + DATE)
     sock.sent = b""
-    with pytest.raises(nntp.NNTPDataError, match="CR or NUL"):
+    with pytest.raises(
+        nntp.NNTPDataError, match="Article line contains a CR outside a CRLF ending"
+    ):
         client.post({"Subject": "hi"}, body)
     assert sock.sent == b""  # Not even POST: no half-posted article
+    assert client.date().year == 2024
+
+
+@pytest.mark.parametrize(
+    "items",
+    [
+        [b"x\ny\rz\n"],  # CR inside a line, after the LF split
+        [b"x\n\0\n"],  # NUL on a later line of an item
+        [b"x\n", b"a\rb"],  # CR in a later item
+        [b"x\r"],  # CR at the end of an item, with no LF
+    ],
+)
+def test_post_iterable_illegal_chars_sends_nothing(
+    connect: Connect, items: list[bytes]
+) -> None:
+    client, sock = connect(WELCOME + MODE_READER + DATE)
+    sock.sent = b""
+    with pytest.raises(
+        nntp.NNTPDataError, match="Article line contains a CR outside a CRLF ending"
+    ):
+        client.post({"Subject": "hi"}, items)
+    assert sock.sent == b""
     assert client.date().year == 2024
 
 
@@ -196,3 +220,55 @@ def test_post_unexpected_final_reply(connect: Connect) -> None:
         client.post({"Subject": "x"}, b"x\n")
     assert info.value.code == 299
     assert client.date().year == 2024
+
+
+def test_post_dot_header_name_is_stuffed(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + b"340 send\r\n240 ok\r\n")
+    sock.sent = b""
+    client.post({".X-Foo": "1", "Subject": "hi"}, b"x\n")
+    # A server would read a bare ".X-Foo" line as the end of a dot-stuffed line
+    assert sock.sent == b"POST\r\n..X-Foo: 1\r\nSubject: hi\r\n\r\nx\r\n.\r\n"
+
+
+def test_ihave_dot_header_name_is_stuffed(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + IHAVE_OK)
+    sock.sent = b""
+    client.ihave("<a@b>", {".X-Foo": "1"}, b"x\n")
+    assert sock.sent == (
+        b"IHAVE <a@b>\r\n..X-Foo: 1\r\nMessage-ID: <a@b>\r\n\r\nx\r\n.\r\n"
+    )
+
+
+def test_post_folded_header_continuation_is_not_stuffed(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + b"340 send\r\n240 ok\r\n")
+    sock.sent = b""
+    client.post({"Subject": "a\r\n .b"}, b"x\n")  # Fold; the line starts with a space
+    assert sock.sent == b"POST\r\nSubject: a\r\n .b\r\n\r\nx\r\n.\r\n"
+
+
+def test_post_fold_with_dot_line_sends_nothing(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER)
+    sock.sent = b""
+    # A bare LF is not a fold, so a line starting with "." is refused, not sent
+    with pytest.raises(ValueError, match="Invalid header value"):
+        client.post({"Subject": "a\n.b"}, b"x\n")
+    assert sock.sent == b""
+
+
+@pytest.mark.parametrize(
+    ("items", "lines"),
+    [
+        ([b"x\n.\nQUIT\n"], b"x\r\n..\r\nQUIT\r\n"),  # Interior LF ends a line
+        ([b"a\nb\r\n.c\n", b"d"], b"a\r\nb\r\n..c\r\nd\r\n"),  # Several lines, CRLF
+        ([b"x\n\n"], b"x\r\n\r\n"),  # Empty line inside an item
+        ([b"a", b".b", b"c\n"], b"a\r\n..b\r\nc\r\n"),  # No LF: still one line
+        ([b"", b"x\n"], b"\r\nx\r\n"),  # Empty item: an empty line, as before
+    ],
+)
+def test_post_body_item_lines_are_split(
+    connect: Connect, items: list[bytes], lines: bytes
+) -> None:
+    client, sock = connect(WELCOME + MODE_READER + b"340 send\r\n240 ok\r\n")
+    sock.sent = b""
+    client.post({"Subject": "hi"}, items)
+    assert sock.sent == b"POST\r\nSubject: hi\r\n\r\n" + lines + b".\r\n"
