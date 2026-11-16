@@ -53,6 +53,8 @@ def unparse_range(obj: Range) -> str:
         return str(obj)
 
     if isinstance(obj, tuple):
+        if any(isinstance(bound, bool) for bound in obj):
+            raise ValueError("Invalid range format")
         if len(obj) == 1:
             return f"{obj[0]}-"
         if len(obj) == 2:
