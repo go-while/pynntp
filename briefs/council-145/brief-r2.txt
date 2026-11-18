@@ -1,0 +1,10 @@
+You are a reviewer for pynntp, a Python NNTP client library (upstream greenbender/pynntp). This is round 2 of a review of open pull request #145 (opt-in fault-injection tests against nntp-testkit's fake server: tests/faults/scenarios.py with the runner and about 228 scenarios, test_faults.py, README.md, an opt-in CI workflow). The working directory is a clean checkout of the new head ae27409; the attached file is only the fix delta since round 1 (88a97b1..ae27409). You can read, grep and glob files; you cannot run anything.
+
+Open findings from round 1, to confirm fixed:
+1. (Med) Server mismatches and server_check were evaluated only when the client-side reason was empty, so a known= scenario (expected client failure) reported XFAIL even when the server also saw unexpected client lines or a server check failed.
+2. (Low) judge_error accepted a clean error when the probe state was "late-broken" (connection out of sync and unmarked; the DATE probe failed only on leftover bytes) for Err(state="any") and Clean, although the README promises an error passes only if the connection is in sync or marked broken.
+3. (Note) The post/early-441-then-close comment claimed the server check covers what the client sent; the server closes right after the POST line.
+
+For each: fixed or not. Then: did the delta add a new problem? For test code, harm means a scenario that can't fail, a wrong pass/fail verdict (e.g. accepting a desynced connection, or a known-failure marker hiding a real regression), a known marker that would no longer XPASS when its bug is fixed, flakiness or hangs, or leaked processes or credentials. Each finding: file:line at the head, when it triggers, severity Low/Med/High, confirmed by reading. Notes on a separate list. "Nothing found" is valid. Facts from the lead: on a test host with nntp-fakeserver v0.13.0, the fault suite gives 220 passed, 8 xfailed (strict), the same 8 known scenarios as before; the full check passes (1034 unit tests, ruff, mypy). Score 1-10 for this head, and say what keeps it from a 10.
+
+End with one line: "#145 r2: <score>, <n> findings (H/M/L): <short titles or ->".

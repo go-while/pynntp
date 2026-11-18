@@ -1,0 +1,14 @@
+You are a fact checker for a public text of pynntp, a Python NNTP client library (upstream greenbender/pynntp). Issue #166 "Code review status since 3.0.0" gets a new section "Open PRs and their review": a table of the 23 open PRs with what each fixes, its review ("council") score line and its state, plus one line on the combined review. The section is attached (table.md); the whole new issue text is council-facts-166/issue166-new2.md (the "item N" links point to the numbered list "Findings from the 2026-11-14 review round" in it). Check every factual claim in that section; nothing else.
+
+Evidence:
+- Each PR's live text and state: `gh pr view <n> -R greenbender/pynntp --json number,title,isDraft,body` or `gh api repos/greenbender/pynntp/pulls/<n>`; linked issues: `gh api repos/greenbender/pynntp/issues/<n>`.
+- Review reports in upstream-gap/: council-pr<N>-* (older PRs), council-fix-<branch>-* (the newer PRs, e.g. council-fix-yenc-keyword-regex-*, council-fix-head-read-all-*), council-pr177-*, review-pr153-*, council-int1-r1-*; and the tracker deep-fixes-status.md. Reports for #145 and #167 are in upstream-gap/ too (council-pr145-*, council-pr167-*). The deep review: deep-int1/deep-int1-merged-hk-deep-dedupe.md.
+
+Claims to check:
+ T1 For each PR: the "Fixes" cell (issue number or "item N" of the 2026-11-14 list, or tests/CI/lint config) matches the PR.
+ T2 For each PR: the "Council" cell matches the score line in the PR's own text (or, for #177 and #153 which have none, the reports: #177 r1 opus 9.5, sol 9.5; #153 one review, 10/10), and the score line matches its review reports (round label may count the PR's own council rounds).
+ T3 For each PR: the state (ready / draft) is the live state; #187's reason "held back: low impact, touches every command".
+ T4 The header: each PR was reviewed by two reviewers from different model families (Claude Opus plus OpenAI Sol or Terra), and every finding was fixed or decided before the PR was marked ready; the score line is in each PR's text (check the exceptions #153 and #177).
+ T5 The closing line: combined-diff review r1: opus 9.6, sol 9.5; deep review of all of nntp/ (Haiku, Sonnet, Terra, Sol, merged by Opus) found nothing above low impact.
+
+For each claim: shown / not shown / wrong, with evidence. A claim not shown, a wrong claim or a self-contradiction is a finding with a severity (Low wording, Med a claim the maintainer would rely on, High misleading about behaviour or safety) and the exact corrected wording. Say what you could not check. End with one line: "facts-166-table: <n> claims checked, <k> findings (H/M/L): <short titles or ->".

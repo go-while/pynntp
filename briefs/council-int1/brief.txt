@@ -1,0 +1,33 @@
+You are a reviewer for pynntp, a Python NNTP client library (upstream greenbender/pynntp, release 3.3.0). This is a council review of a COMBINATION: branch integration-1 = base 2bfca17 (3.3.0) + 19 open pull requests that change nntp/ (plus test-only and CI PRs), merged together. Frozen base 2bfca17, frozen head e650e29. The working directory is a clean checkout of the head; the attached file is the combined nntp/ diff (base...head). Each PR was already reviewed ALONE against 3.3.0; do NOT re-review a PR's own logic in isolation. Your job is only what the PRs do TOGETHER: places where one PR's change breaks, weakens, contradicts or duplicates another's, in shared code paths.
+
+The PRs (all in nntp/; nntp.py unless noted):
+#168 a response iterator resumed after reconnect()/close() raises NNTPSyncError
+#169 post(): message-id only from the first reply token or after "Article received"
+#170 ignore a stray =yend outside an open yEnc block
+#171 XZVER/XZHDR: keep a last row without CRLF (refuse bare LF)
+#172 utils.parse_headers(): keep the whitespace before a folded line
+#173 group(): reject malformed numbers in the 211 reply
+#174 HDR/XHDR/XPAT rows: only a full message-id (only for by-message-id requests) or a plain number; utils.parse_number_value(line, *, allow_msgid=True)
+#175 utils: LIST OVERVIEW.FMT rejects empty or space-padded field names
+#176 reject True/False inside a range tuple before sending anything (nntp.py, utils.py)
+#178 yEnc: report a =ybegin that follows an unclosed block (also in XZVER's yEnc reader)
+#179 reject empty, blank and bool message-id or article arguments (nntp.py, utils.py)
+#180 reconnect(): stay broken (commands raise NNTPSyncError) when the new connection can't be opened
+#181 NNTPYEncError picklable and copyable
+#182 post()/ihave(): split body iterable items at LF before dot-stuffing
+#183 yenc.py: parse keywords in linear time
+#184 headerdict.py: copy() no longer shares storage
+#185 HEAD and ARTICLE: read the whole response before parsing headers
+#186 reject an invalid ssl_mode instead of connecting in plain text
+#187 refuse to send a command while received data is unread (marks the connection broken)
+Also merged: #177 (ruff config ALL, no nntp/ behaviour), #145 fault tests, #167 integration tests, #153 CI. Merge conflicts were only in docstrings (_info_yenczlib: #170/#178 vs #171; reconnect(): #168 vs #180) and test imports.
+
+Look especially at the shared paths: the read/sync loop and sync-state marking (#168, #180, #185, #187, and every parser that raises mid-response: #170, #171, #173, #174, #175, #178), reconnect()/close() state (#168, #180, #187), post()/ihave() (#169, #182, #187), the yEnc readers (#170, #171, #178, #181, #183), argument validation before sending (#176, #179, #186). Questions: does a parser error now leave the connection in a state another PR assumes differently (unread data vs broken vs in sync)? Does a check in one PR fire before/after another's so that an error type or the sync state changes? Do two PRs validate the same thing differently? Did a merge drop or duplicate a check?
+
+Findings rule: count it only if it can happen in normal operation or with a server or caller the library deals with by design (a hostile server counts, but is Low unless it leaks credentials or corrupts data; a caller mistake counts only if it fails silently with harm), and the harm is real (visible or silent). Known issues to skip: XZVER rejects a sync-flushed (not finished) DEFLATE stream (#154, no fix PR yet); listgroup("") sends a bare LISTGROUP (Low, on the issue list); reconnect()/__init__ docstrings don't list every NNTPError subtype. A pre-existing problem in 3.3.0 that no PR touches is out of scope (mention it under notes only).
+
+For each finding give: file:line at the head, which PRs interact, what goes wrong and when, severity Low/Med/High, confirmed by reading (or by a run), and these fields: harm (crash, hang, data loss or corruption, leak, wrong reply or desync, auth or policy bypass, DoS, test-only); who can trigger it (anyone on the network, a peer/server, an authenticated client, the local admin, nobody in practice); crash (which process, how many users); exploit (DoS only, data integrity, policy bypass, memory corruption; shown or theoretical); conditions (default config or an option, platform, timing); verdict (fix now, fix soon, docs, issue list only, noise). At most 6 findings; notes (style, wishes, guesses without a trigger) separately. "Nothing found" is valid. Say what you did not check.
+
+Facts from the lead (on test hosts): full check passes on the head (ruff, ruff format, mypy --strict, 1667 unit tests); the fault-injection suite (228 scenarios against a misbehaving fake server, every scenario checking the connection is in sync or marked broken after an error) gives 227 passed, 1 xfailed (#154); the INN 2.7.3 integration tests give 31 passed, 4 skipped (implicit TLS off). A review by reading does not claim tests passed.
+
+Give a score 1-10 for this combined head (10 = the PRs merge together safely as they are) and say what keeps it from a 10. End with one line: "int-1: <score>, <n> findings (H/M/L): <short titles or ->".

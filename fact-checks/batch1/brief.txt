@@ -1,0 +1,58 @@
+You are a fact checker for public texts of pynntp, a Python NNTP client library (upstream greenbender/pynntp, release 3.3.0 = base 2bfca17). Five pull request descriptions are now public and marked ready for review: #182, #183, #185, #186, #171. Check every factual claim in them; nothing else (not code quality, not style).
+
+Material:
+- The five PR texts: council-facts-b1/pr-texts.md (the head commit of each PR is named there).
+- The working directory is a clean checkout of the BASE (3.3.0), for "before" claims. The attached file holds each PR's diff base...head, for "after" claims (code, tests, docstrings, README).
+- GitHub, read-only: `gh pr view <n> -R greenbender/pynntp`, `gh api repos/greenbender/pynntp/...` GET (files at a PR head: `gh api "repos/greenbender/pynntp/contents/<path>?ref=<head sha>"`; issues: `gh api repos/greenbender/pynntp/issues/<n>`; commit messages: `gh api repos/greenbender/pynntp/commits/<sha>`; CI: `.../commits/<sha>/check-runs`).
+- Review reports (for the "council r<N>: ..." score lines and for measurements): upstream-gap/, files named council-fix-post-body-item-lines-*, round0-post-body-item-lines-* (#182), council-fix-yenc-keyword-regex-* (#183), council-fix-head-read-all-* (#185), council-fix-ssl-context-plaintext-* (#186), council-pr171-* (#171); reviewx-summary.md and deep-fixes-status.md (tracker).
+
+The claims to check, with where the evidence should be:
+#182 (head 2ddb15b)
+ C1 base: `_prepare_article()` treated each body-iterable item as one line; only CR and NUL were refused (base nntp/nntp.py).
+ C2 base: `client.post(headers, [b"x\n.\nQUIT\n"])` sent "x\n.\nQUIT\r\n" (base code; tests in the diff).
+ C3 a server ending lines on a bare LF sees the lone "." as the end of the article; the rest is read as commands (reasoning; is it consistent with the code?).
+ C4 head: items are split at LF by `_item_lines()`; the example is sent as `x\r\n..\r\nQUIT\r\n` (diff + tests).
+ C5 head: an item without trailing LF still ends a line, an empty item is an empty line, str/bytes bodies unchanged (diff + tests).
+ C6 head: the CR/NUL check runs on the split lines; CRLF endings fine; other CR or NUL raises NNTPDataError before anything is sent (diff + tests).
+ C7 head: the post() and _prepare_article() docstrings say items end a line and are split at LF (diff).
+ C8 tests cover: the example through post() and ihave() with exact bytes, several lines in one item, empty items, items without LF, CR/NUL errors (diff).
+ C9 score line "council r1: opus 9.6, sol 10 (round 0: haiku 9, sonnet 9)" (reports; note the round names in the file names).
+#183 (head 54751e2)
+ C1 base `_KEYWORD_RE` in nntp/yenc.py was `(\w+)=(\S*)` (base).
+ C2 cost grew with the square of the line length on long word runs without "=" (reasoning/tests).
+ C3 a `=ybegin ` line with about 64 KB of "a" took about 45 s of CPU in body()/article() via _decode_yenc and parse_keywords (a measurement: find it in the reports or commit messages; the commit message says "tens of seconds").
+ C4 the =yend line via check_trailer is affected the same way (base code paths).
+ C5 head pattern `(?<!\w)(\w+)=(\S*)`, linear (diff).
+ C6 results are the same as before for every line (reasoning + tests).
+ C7 tests cover: the keyword table (a-b=c, x=1x=2, ==4 a==5, 9z=2, a full =yend line), parse_keywords() on 64 KiB runs with a time bound, a BODY with long =ybegin and =yend lines (diff).
+ C8 score line "council r2: opus 9.6, sol 10" (reports).
+#185 (head edbe199)
+ C1 base: utils.parse_headers() stops at the first blank line or a non-header line.
+ C2 base: a blank line inside a HEAD response left the rest unread; the dropped iterator marked the connection broken, so the next command raised NNTPSyncError although head() returned normally.
+ C3 base: a header line without a colon in HEAD or ARTICLE raised NNTPDataError with the rest unread, and _data_errors() marked the connection broken.
+ C4 head: head() reads the whole response, then parses; lines after a blank line are read and ignored; a bad header line raises NNTPDataError ("Invalid article headers: ...") with the connection in sync.
+ C5 head: article() reads the rest before raising NNTPDataError for a bad header line.
+ C6 head: both docstrings say this.
+ C7 head: a connection lost while reading the rest raises the usual error and marks the connection broken.
+ C8 tests cover: HEAD with a blank line inside, a line without a colon in HEAD and ARTICLE, a connection cut mid-response.
+ C9 score line "council r2: opus 9.5, sol 10" (reports).
+#186 (head 9a3379d)
+ C1 base: ssl_mode was compared only with the two SSLMode members; "STARTTLS" or "tls" took neither TLS branch even with use_ssl=True.
+ C2 base: the example connected in plain text on port 119 and, on a 480 reply, sent the login and password in clear.
+ C3 head: with use_ssl=True the constructor converts with SSLMode(ssl_mode) first; members and their values ("implicit", "starttls") work; anything else raises ValueError before a socket is opened; with use_ssl=False the mode isn't checked.
+ C4 head: the constructor docstrings, from_url() docstring and README say ssl_mode and ssl_context only take effect with use_ssl=True (set by nntps://, snews://, nntp+starttls://) and that an invalid ssl_mode raises ValueError.
+ C5 head: ssl_context with use_ssl=False or an nntp:// URL is still accepted and ignored.
+ C6 tests cover: invalid modes with use_ssl=True (no socket opened), the ignored mode with use_ssl=False, the string values, from_url() passing ssl_context on.
+ C7 score line "council r2: opus 9.5, terra 9.5" (reports).
+#171 (head 8ac5794)
+ C1 base: _info_yenczlib() silently dropped a last row without CRLF although the stream was complete and its yEnc size/CRC correct.
+ C2 head: after the trailer and end-of-stream checks pass, a remaining row without CRLF is returned as the last row; no CRLF added; the row parsers don't need one.
+ C3 head: remaining data with a bare LF raises NNTPDataError.
+ C4 head: line-length, CRC/size and truncation checks unchanged; on failure the partial row isn't returned.
+ C5 #145's known-failure marker for xzver/last-row-without-crlf goes when this merges (#145 is go-while's open PR; its scenario file tests/faults/scenarios.py at its head).
+ C6 tests cover: XZVER and XZHDR with one and two rows whose last row lacks CRLF, terminated rows, an empty compressed stream, a bad trailer.
+ C7 "Fixes #160": issue #160 exists and describes this bug.
+ C8 score line "council r1: opus 9.5, sol 9.5" (reports).
+Also check every claim the texts make that this list missed.
+
+For each claim: shown / not shown / wrong, with the evidence (file:line, report name, or gh call). A claim not shown, a wrong claim, a self-contradiction, or a "see PR/test X" that X does not hold is a finding; give each finding a severity (Low: imprecise wording; Med: a claim a maintainer would rely on that is not shown or is wrong; High: false in a way that misleads about behaviour or safety) and the exact corrected wording. Notes separately. Say what you could not check. End with one line: "facts-b1: <n> claims checked, <k> findings (H/M/L): <short titles or ->".

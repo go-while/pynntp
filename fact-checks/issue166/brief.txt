@@ -1,0 +1,20 @@
+You are a fact checker for a public text of pynntp, a Python NNTP client library (upstream greenbender/pynntp, release 3.3.0 = base 2bfca17). Issue #166 "Code review status since 3.0.0" is the review tracker. Its text is being updated; check every factual claim in the CHANGED lines only (the rest was checked before). Nothing else: not style, not the code.
+
+Material:
+- The new text: council-facts-166/issue166-new.md; the change as a diff against the live text: council-facts-166/issue166.diff (attached too).
+- GitHub, read-only: `gh api repos/greenbender/pynntp/issues/166` (live text), `gh api repos/greenbender/pynntp/pulls/<n>`, `gh api repos/go-while/pynntp/branches/integration-1`, commit messages via `gh api repos/go-while/pynntp/commits/<sha>`.
+- Evidence files: upstream-gap/deep-fixes-status.md (tracker, see the 2026-11-16/17 entries), upstream-gap/issues-from-review.md, deep-int1/ (the four deep reviews and deep-int1-merged-hk-deep-dedupe.md with the verification runs), council-int1/ (combined-diff review; reports council-int1-r1-*.md are in upstream-gap/), council-facts-b1/facts-b1-hk-facts-b1.md (the 65 s measurement).
+
+Claims to check, with where the evidence should be:
+ C1 Areas 1-8 (all of nntp/) were reviewed once more on 2026-11-17, so their counts go up by one (deep review of all of nntp/ on integration-1: deep-int1/ brief and reports; and the combined-diff council: council-int1-r1-*.md).
+ C2 Area 9: all open PRs' tests and CI were read with the merged code on 2026-11-17 (the deep review's secondary scope; check what the reports say they read).
+ C3 Item 6: one =ybegin/=yend line with 64 KB of word characters costs about a minute of CPU in body()/article(), 65 s measured on a test host (facts-b1-hk-facts-b1.md).
+ C4 Low impact: XZVER/XZHDR data after the end of the zlib stream is buffered at quadratic cost and then dropped silently, so a second stream is lost (deep-int1-merged ..., item M7, and the existing entry).
+ C5 Low impact: in XZVER/XZHDR and plain XOVER/XHDR a row ended by a bare LF followed by a CRLF row is read as one row, the next row is lost; only a bare LF in the last, unterminated row is refused (M2; #171's code at its head c337beb).
+ C6 Low impact: yEnc single-part: =ybegin size= is not compared with the decoded size; only =yend size is (M6).
+ C7 2026-11-17: all open PRs merged together on 3.3.0 (branch integration-1 on go-while/pynntp) pass the unit tests, ruff, mypy --strict, the fault-injection scenarios and the INN integration tests (tracker entries; head 84f74ca).
+ C8 Two interactions between PRs showed up only in that combined run: #177's ruff rules with a positional bool in #174, and #145's made-up `240 ok <id>` replies with #169; fixed in #174 and #145 (commits e339eda on go-while/pynntp branch fix/158-number-value and 3f61111 on port/fault-tests; tracker).
+ C9 A review of the combined diff and a deep review of all of nntp/ on that branch found nothing above low impact (council-int1 reports; deep-int1-merged).
+Also check any other claim in the changed lines that this list missed, and whether the changed lines contradict an unchanged line of the issue.
+
+For each claim: shown / not shown / wrong, with the evidence (file:line, report name, or gh call). A claim not shown, a wrong claim, a self-contradiction, or a "see X" that X does not hold is a finding; give each finding a severity (Low: imprecise wording; Med: a claim the maintainer would rely on that is not shown or is wrong; High: false in a way that misleads about behaviour or safety) and the exact corrected wording. Say what you could not check. End with one line: "facts-166: <n> claims checked, <k> findings (H/M/L): <short titles or ->".
