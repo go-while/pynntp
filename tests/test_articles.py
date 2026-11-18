@@ -62,6 +62,13 @@ def test_article_bad_status(connect: Connect, status: bytes) -> None:
     assert client.date().year == 2024  # The article was read; in sync
 
 
+def test_head_folded_whitespace(connect: Connect) -> None:
+    server = b'221 1 <a@b>\r\nX-Text: "one \r\n two" \t\r\n.\r\n' + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
+    assert client.head(1)["X-Text"] == '"one  two"'
+    assert client.date().year == 2024
+
+
 @pytest.mark.parametrize("part", [None, 2])
 def test_yenc_valid(connect: Connect, part: int | None) -> None:
     client, _ = connect(WELCOME + MODE_READER + yenc_body(PLAIN, part=part))
@@ -92,6 +99,25 @@ def test_yenc_missing_trailer(connect: Connect) -> None:
     client, _ = connect(WELCOME + MODE_READER + yenc_body(PLAIN, end=False))
     with pytest.raises(nntp.NNTPDataError, match="missing =yend"):
         client.body(1)
+
+
+def test_yenc_missing_trailer_before_next_block(connect: Connect) -> None:
+    first, second = b"first file", b"second file"
+    block_1 = (
+        f"=ybegin line=128 size={len(first)} name=f\r\n".encode()
+        + dot_stuff(yenc_encode(first))  # No =yend: the block is open
+    )
+    block_2 = (
+        f"=ybegin line=128 size={len(second)} name=f\r\n".encode()
+        + dot_stuff(yenc_encode(second))
+        + f"=yend size={len(second)} crc32={zlib.crc32(second):08x}\r\n".encode()
+    )
+    server = b"222 1 <a@b>\r\n" + block_1 + block_2 + b".\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    with pytest.raises(nntp.NNTPYEncError, match="missing =yend") as info:
+        client.body(1)
+    assert info.value.data == first + second  # Both blocks kept, as for other errors
+    assert client.date().year == 2024  # Whole response was read; still in sync
 
 
 def test_yenc_trailer_without_crc_checks_size_only(connect: Connect) -> None:
@@ -135,6 +161,95 @@ def test_yenc_text_outside_block_dropped(connect: Connect) -> None:
     assert client.body(1) == PLAIN
 
 
+@pytest.mark.parametrize("article", [False, True])
+@pytest.mark.parametrize("part", [None, 2])
+@pytest.mark.parametrize("trailer", [b"=yend size=0 crc32=0", b"=yend nonsense"])
+def test_yenc_stray_trailer_outside_block(
+    connect: Connect, article: bool, part: int | None, trailer: bytes
+) -> None:
+    server = yenc_body(PLAIN, part=part)[:-3] + trailer + b"\r\n.\r\n"
+    if article:
+        server = server.replace(
+            b"222 1 <a@b>\r\n", b"220 1 <a@b>\r\nSubject: f\r\n\r\n", 1
+        )
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    if article:
+        assert client.article(1)[2] == PLAIN
+    else:
+        assert client.body(1) == PLAIN
+    assert client.date().year == 2024
+
+
+@pytest.mark.parametrize("article", [False, True])
+@pytest.mark.parametrize("early", [b"=yend size=0", b"=yend size=0 crc32=00000000"])
+def test_yenc_early_trailer_does_not_hide_data(
+    connect: Connect, article: bool, early: bytes
+) -> None:
+    # An early =yend closes the block, so the data after it is outside any
+    # block; the real trailer after that data must not be skipped as stray
+    begin, rest = yenc_body(PLAIN).split(b"\r\n", 2)[1:]
+    server = b"222 1 <a@b>\r\n" + begin + b"\r\n" + early + b"\r\n" + rest
+    if article:
+        server = server.replace(
+            b"222 1 <a@b>\r\n", b"220 1 <a@b>\r\nSubject: f\r\n\r\n", 1
+        )
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    read = client.article if article else client.body
+    with pytest.raises(nntp.NNTPYEncError, match="outside a block") as info:
+        read(1)
+    assert info.value.data == b""
+    assert client.date().year == 2024  # Read to the end; still in sync
+
+
+def test_yenc_stray_trailer_after_blank_lines(connect: Connect) -> None:
+    server = yenc_body(PLAIN)[:-3] + b"\r\n\r\n=yend size=0\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    assert client.body(1) == PLAIN
+    assert client.date().year == 2024
+
+
+def test_yenc_space_line_is_data_not_blank(connect: Connect) -> None:
+    # A space encodes byte 0xf6, so the line is data outside a block, and the
+    # last trailer, which does not match the empty block, must not be ignored
+    server = (
+        b"222 1 <a@b>\r\n=ybegin line=128 size=1 name=x\r\n=yend size=0\r\n"
+        b" \r\n=yend size=1\r\n.\r\n"
+    )
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    with pytest.raises(nntp.NNTPYEncError, match="outside a block") as info:
+        client.body(1)
+    assert info.value.data == b""
+    assert client.date().year == 2024
+
+
+def test_yenc_duplicate_trailer_after_signature(connect: Connect) -> None:
+    server = (
+        b"222 1 <a@b>\r\n=ybegin line=128 size=1 name=x\r\nk\r\n=yend size=1\r\n"
+        b"-- \r\nsignature\r\n=yend size=1\r\n.\r\n"
+    )
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    assert client.body(1) == b"A"
+    assert client.date().year == 2024
+
+
+def test_yenc_stray_trailer_between_blocks(connect: Connect) -> None:
+    first = yenc_body(b"first")[:-3]
+    second = yenc_body(b"second").split(b"\r\n", 1)[1]
+    server = first + b"=yend size=0\r\n" + second + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
+    assert client.body(1) == b"firstsecond"
+    assert client.date().year == 2024
+
+
+def test_yenc_stray_trailer_does_not_hide_bad_block(connect: Connect) -> None:
+    server = yenc_body(PLAIN, trailer="size=1")[:-3] + b"=yend size=768\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    with pytest.raises(nntp.NNTPYEncError, match="trailer says 1") as info:
+        client.body(1)
+    assert info.value.data == PLAIN
+    assert client.date().year == 2024
+
+
 def test_body_decode_forced_ybegin_prefix_is_not_a_block(connect: Connect) -> None:
     server = b"222 1 <a@b>\r\n=ybeginners guide\r\n.\r\n"
     client, _ = connect(WELCOME + MODE_READER + server)
@@ -146,6 +261,19 @@ def test_body_ybegin_prefix_is_plain(connect: Connect) -> None:
     server = b"222 1 <a@b>\r\n=ybeginners guide\r\n.\r\n"
     client, _ = connect(WELCOME + MODE_READER + server)
     assert client.body(1) == b"=ybeginners guide\r\n"
+
+
+def test_body_yenc_long_word_run_keeps_sync(connect: Connect) -> None:
+    plain = b"hello world"
+    size, crc = len(plain), zlib.crc32(plain)
+    # Word characters without "=" on the =ybegin and =yend lines (under the line limit)
+    run = "a" * 60000
+    begin = f"222 1 <a@b>\r\n=ybegin {run} line=128 size={size} name=x\r\n"
+    end = f"=yend size={size} crc32={crc:08x} {run}\r\n.\r\n"
+    server = begin.encode() + dot_stuff(yenc_encode(plain)) + end.encode()
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    assert client.body(1) == plain
+    assert client.date().year == 2024
 
 
 def test_body_two_yenc_blocks(connect: Connect) -> None:
@@ -169,3 +297,48 @@ def test_article_yenc_subject_plain_body(connect: Connect) -> None:
     article = b"220 1 <a@b>\r\nSubject: file yEnc (1/1)\r\n\r\nplain text\r\n.\r\n"
     client, _ = connect(WELCOME + MODE_READER + article)
     assert client.article(1)[2] == b"plain text\r\n"  # Detected from the body only
+
+
+def test_head_blank_line_inside_headers(connect: Connect) -> None:
+    server = b"221 1 <a@b>\r\nSubject: hi\r\n\r\nFrom: me\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    # Headers end at the blank line; the rest of the response is read and dropped
+    assert client.head(1) == {"Subject": "hi"}
+    assert client.date().year == 2024  # Whole response was read; still in sync
+
+
+def test_head_bad_header_line_keeps_connection(connect: Connect) -> None:
+    server = b"221 1 <a@b>\r\nSubject: hi\r\nno colon here\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    with pytest.raises(nntp.NNTPDataError, match="Invalid article headers"):
+        client.head(1)
+    assert client.date().year == 2024  # Whole response was read; still in sync
+
+
+def test_article_bad_header_line_keeps_connection(connect: Connect) -> None:
+    server = b"220 1 <a@b>\r\nSubject: hi\r\nno colon here\r\n\r\nbody\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    with pytest.raises(nntp.NNTPDataError, match="Invalid article headers"):
+        client.article(1)
+    assert client.date().year == 2024  # Whole response was read; still in sync
+
+
+def test_head_connection_lost_breaks_connection(connect: Connect) -> None:
+    # Cut off before the end of the HEAD response
+    client, _ = connect(WELCOME + MODE_READER + b"221 1 <a@b>\r\nSubject: hi\r\n")
+    with pytest.raises(nntp.NNTPError, match="Failed to read"):
+        client.head(1)
+    with pytest.raises(nntp.NNTPSyncError, match="reconnect"):
+        client.date()
+
+
+def test_article_bad_header_then_connection_lost_breaks_connection(
+    connect: Connect,
+) -> None:
+    # The bad line stops the header parse; reading the rest then fails
+    server = b"220 1 <a@b>\r\nSubject: hi\r\nno colon here\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPError, match="Failed to read"):
+        client.article(1)
+    with pytest.raises(nntp.NNTPSyncError, match="reconnect"):
+        client.date()

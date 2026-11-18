@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import gc
+import gzip
+import socket
 import ssl
+from contextlib import closing
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -13,14 +16,19 @@ import nntp
 from nntp.nntp import NNTPSyncError
 from nntp.types import SSLMode
 from tests.helpers import (
+    COMPRESS_OK,
     DATE,
     LIST,
     MODE_READER,
     ODD,
     OVERVIEW_FMT,
     WELCOME,
+    XOVER_LINES,
     Connect,
     FakeSocket,
+    Packets,
+    deflated,
+    xzver_server,
 )
 
 if TYPE_CHECKING:
@@ -205,6 +213,29 @@ def test_failed_reconnect_stays_broken(connect: Connect) -> None:
     assert client.date().year == 2024
 
 
+def test_reconnect_socket_error_stays_broken(
+    monkeypatch: pytest.MonkeyPatch, connect: Connect
+) -> None:
+    client, _ = connect(WELCOME + MODE_READER, WELCOME + MODE_READER + DATE)
+    client.close()
+    open_socket: Any = socket.create_connection  # The fake from connect()
+    refused = [True]
+
+    def flaky(*args: object, **kwargs: object) -> object:
+        if refused:
+            refused.pop()
+            raise ConnectionRefusedError(111, "Connection refused")
+        return open_socket(*args, **kwargs)
+
+    monkeypatch.setattr("nntp.nntp.socket.create_connection", flaky)
+    with pytest.raises(ConnectionRefusedError):
+        client.reconnect()
+    with pytest.raises(NNTPSyncError, match="reconnect"):
+        client.date()
+    client.reconnect()
+    assert client.date().year == 2024
+
+
 def test_decompression_error_part_way_breaks_connection(connect: Connect) -> None:
     server = b"215 list COMPRESS=GZIP\r\n" + b"not gzip data" + b".\r\n" + DATE
     client, _ = connect(WELCOME + MODE_READER + server)
@@ -228,10 +259,141 @@ def test_command_rejects_line_breaks(connect: Connect, arg: str) -> None:
 def test_starttls_rejects_data_after_reply(connect: Connect) -> None:
     # A man-in-the-middle appends a fake reply to the plaintext 382. If it
     # arrives in a later read it goes to the TLS handshake instead, and fails.
-    injected = b"200 hi\r\n382 go ahead\r\n211 1 1 1 fake.group\r\n"
+    injected = b"382 go ahead\r\n211 1 1 1 fake.group\r\n"
     with pytest.raises(nntp.NNTPProtocolError, match="after STARTTLS"):
-        connect(injected, use_ssl=True, ssl_mode=SSLMode.STARTTLS)
+        connect(
+            Packets(b"200 hi\r\n", injected), use_ssl=True, ssl_mode=SSLMode.STARTTLS
+        )
     assert FakeSocket.last.closed
+
+
+# Data the server sent beyond a reply must not become the reply to the next
+# command. Only data in the same recv is found, so these run with one big recv;
+# data arriving later is read as the reply, as it can't be told apart.
+BIG_RECV = pytest.mark.parametrize("chunk", [4096])
+STRAY_DATE = b"111 20250506070809\r\n"  # A reply nobody asked for
+LATER = WELCOME + MODE_READER + DATE  # What reconnect() reads
+
+
+def assert_refused(
+    client: nntp.NNTPClient, sock: FakeSocket, call: Callable[[nntp.NNTPClient], object]
+) -> None:
+    """The call raises, sends nothing and leaves the connection out of sync."""
+    sent = sock.sent
+    with pytest.raises(nntp.NNTPProtocolError, match="Unexpected data"):
+        call(client)
+    assert sock.sent == sent
+    with pytest.raises(NNTPSyncError, match="reconnect"):
+        client.date()
+    assert sock.sent == sent
+    client.reconnect()
+    assert client.date().year == 2024
+
+
+@BIG_RECV
+def test_second_reply_in_same_packet_is_refused(connect: Connect) -> None:
+    packets = Packets(
+        WELCOME,
+        MODE_READER,
+        b"211 1 1 1 alt.a\r\n211 9 9 9 alt.b\r\n",
+        b"211 5 5 5 alt.c\r\n",
+    )
+    client, sock = connect(packets, LATER)
+    assert client.group("alt.a") == (1, 1, 1, "alt.a")
+    assert_refused(client, sock, lambda c: c.group("alt.c"))
+
+
+@BIG_RECV
+def test_line_after_terminator_is_refused(connect: Connect) -> None:
+    packets = Packets(WELCOME, MODE_READER, LIST + STRAY_DATE, DATE)
+    client, sock = connect(packets, LATER)
+    assert len(list(client.list_active())) == 2
+    assert_refused(client, sock, lambda c: c.date())
+
+
+@BIG_RECV
+def test_line_after_greeting_is_refused(connect: Connect) -> None:
+    packets = Packets(WELCOME + STRAY_DATE, DATE)
+    client, sock = connect(packets, WELCOME + DATE, reader=False)
+    assert_refused(client, sock, lambda c: c.date())
+
+
+@BIG_RECV
+def test_line_after_greeting_fails_mode_reader(connect: Connect) -> None:
+    with pytest.raises(nntp.NNTPProtocolError, match="Unexpected data"):
+        connect(Packets(WELCOME + STRAY_DATE, MODE_READER))
+    assert FakeSocket.last.sent == b""
+    assert FakeSocket.last.closed
+
+
+@BIG_RECV
+@pytest.mark.parametrize("stray", [b"stray text\r\n", STRAY_DATE], ids=["text", "date"])
+def test_lines_after_error_reply_are_refused(connect: Connect, stray: bytes) -> None:
+    packets = Packets(WELCOME, MODE_READER, b"430 no such article\r\n" + stray, DATE)
+    client, sock = connect(packets, LATER)
+    with pytest.raises(nntp.NNTPTemporaryError):
+        client.article(1)
+    assert_refused(client, sock, lambda c: c.date())
+
+
+@BIG_RECV
+def test_login_retry_refuses_unread_data(connect: Connect) -> None:
+    # The 480 comes with a stray line: the login must not read it as a reply
+    packets = Packets(WELCOME, MODE_READER, b"480 auth\r\n" + STRAY_DATE, b"281 ok\r\n")
+    client, sock = connect(packets, LATER, username="fred", password="pw")
+    with pytest.raises(nntp.NNTPProtocolError, match="Unexpected data"):
+        client.date()
+    assert sock.sent == b"MODE READER\r\nDATE\r\n"  # No AUTHINFO
+    with pytest.raises(NNTPSyncError, match="reconnect"):
+        client.date()
+
+
+XFEATURE_GZIP_OK = b"290 feature enabled\r\n"
+
+
+def gzip_xover_reply(payload: bytes, *, terminator: bool) -> bytes:
+    """A 224 reply with gzip data; the "." line is outside it, or inside it."""
+    head = b"224 ok COMPRESS=GZIP\r\n"
+    if terminator:
+        return head + gzip.compress(payload + b".\r\n")
+    return head + gzip.compress(payload) + b".\r\n"
+
+
+@BIG_RECV
+@pytest.mark.parametrize("terminator", [False, True], ids=["dot-line", "terminator"])
+def test_line_after_gzip_response_is_refused(
+    connect: Connect, terminator: bool
+) -> None:
+    reply = gzip_xover_reply(XOVER_LINES, terminator=terminator) + STRAY_DATE
+    packets = Packets(WELCOME, MODE_READER, XFEATURE_GZIP_OK, reply, DATE)
+    client, sock = connect(packets, LATER)
+    client.xfeature_compress_gzip()
+    code, message = client.command("XOVER")
+    assert "".join(client.info(code, message)) == XOVER_LINES.decode()
+    assert_refused(client, sock, lambda c: c.date())
+
+
+@BIG_RECV
+def test_line_inside_gzip_after_terminator_is_refused(connect: Connect) -> None:
+    # The stray line is in the gzip stream, behind the "." that ends the reply
+    reply = b"224 ok COMPRESS=GZIP\r\n" + gzip.compress(
+        XOVER_LINES + b".\r\n" + STRAY_DATE
+    )
+    packets = Packets(WELCOME, MODE_READER, XFEATURE_GZIP_OK, reply, DATE)
+    client, sock = connect(packets, LATER)
+    client.xfeature_compress_gzip()
+    code, message = client.command("XOVER")
+    assert "".join(client.info(code, message)) == XOVER_LINES.decode()
+    assert_refused(client, sock, lambda c: c.date())
+
+
+@BIG_RECV
+def test_line_after_xzver_response_is_refused(connect: Connect) -> None:
+    packets = Packets(WELCOME, MODE_READER, xzver_server() + STRAY_DATE, DATE)
+    client, sock = connect(packets, LATER)
+    code, message = client.command("XZVER")
+    assert "".join(client.info(code, message, yz=True)) == XOVER_LINES.decode()
+    assert_refused(client, sock, lambda c: c.date())
 
 
 def test_480_without_username_raises(connect: Connect) -> None:
@@ -330,6 +492,8 @@ def test_raw_command(connect: Connect) -> None:
         ({}, 119),
         ({"use_ssl": True}, 563),
         ({"use_ssl": True, "ssl_mode": SSLMode.STARTTLS}, 119),
+        ({"use_ssl": True, "ssl_mode": "starttls"}, 119),  # The mode's value
+        ({"use_ssl": True, "ssl_mode": "implicit"}, 563),
         ({"port": 1119, "use_ssl": True}, 1119),
     ],
 )
@@ -346,6 +510,23 @@ def test_default_port(
     with pytest.raises(ConnectionRefusedError):
         nntp.NNTPClient("example.com", **kwargs)  # type: ignore[arg-type]
     assert addresses == [("example.com", port)]
+
+
+@pytest.mark.parametrize("ssl_mode", ["tls", "STARTTLS", "", None, 1])
+def test_invalid_ssl_mode(monkeypatch: pytest.MonkeyPatch, ssl_mode: object) -> None:
+    def no_socket(*_: object, **__: object) -> FakeSocket:
+        raise AssertionError("a socket was opened")
+
+    monkeypatch.setattr("nntp.nntp.socket.create_connection", no_socket)
+    with pytest.raises(ValueError, match="not a valid SSLMode"):
+        nntp.NNTPClient("example.com", use_ssl=True, ssl_mode=ssl_mode)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("ssl_mode", ["tls", None])
+def test_ssl_mode_ignored_without_use_ssl(connect: Connect, ssl_mode: object) -> None:
+    # Plain text was chosen with use_ssl=False, so the mode is not checked
+    client, _ = connect(WELCOME + MODE_READER + DATE, ssl_mode=ssl_mode)
+    assert client.date().year == 2024
 
 
 def test_starttls_480_never_logs_in(connect: Connect) -> None:
@@ -538,6 +719,72 @@ def test_iterator_abandoned_before_reconnect(connect: Connect) -> None:
     del groups  # Closing the old iterator must not break the new connection
     gc.collect()
     assert client.date().year == 2024
+
+
+@pytest.mark.parametrize("started", [True, False])
+def test_iterator_resumed_after_reconnect_raises(
+    connect: Connect, started: bool
+) -> None:
+    listing = b"215 list\r\nalt.test 2 1 y\r\nalt.more 2 1 y\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + listing, WELCOME + MODE_READER + DATE)
+    groups = client.list_active()
+    if started:
+        next(groups)
+    client.reconnect()
+    with pytest.raises(NNTPSyncError, match="after reconnect"):
+        next(groups)  # Must not read the new connection's lines
+    assert client.date().year == 2024  # The new connection is untouched
+
+
+@pytest.mark.parametrize("started", [True, False])
+@pytest.mark.parametrize("leave", ["close", "exit"])
+def test_iterator_resumed_after_close_raises(
+    connect: Connect, started: bool, leave: str
+) -> None:
+    listing = b"215 list\r\nalt.test 2 1 y\r\nalt.more 2 1 y\r\n.\r\n"
+    client, sock = connect(WELCOME + MODE_READER + listing)
+    with client if leave == "exit" else closing(client):
+        groups = client.list_active()
+        if started:
+            next(groups)
+    assert sock.closed
+    read = sock.pos
+    with pytest.raises(NNTPSyncError, match="or close"):
+        next(groups)  # Must not yield the lines still buffered
+    assert sock.pos == read  # And must not read the closed socket
+
+
+@pytest.mark.parametrize("started", [True, False])
+@pytest.mark.parametrize("abandon", [False, True])
+def test_command_after_close_with_open_iterator(
+    connect: Connect, started: bool, abandon: bool
+) -> None:
+    listing = b"215 list\r\nalt.test 2 1 y\r\nalt.more 2 1 y\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + listing)
+    groups = client.list_active()
+    if started:
+        next(groups)
+    client.close()
+    if abandon:
+        groups.close()  # type: ignore[attr-defined]  # Must not change the message
+    with pytest.raises(NNTPSyncError, match="closed or out of sync"):
+        client.date()
+
+
+def test_corrupt_compressed_data_during_response(connect: Connect) -> None:
+    # No terminating ".": the corrupt bytes arrive while the response is read
+    listing = b"215 list\r\nalt.test 2 1 y\r\n"
+    server = COMPRESS_OK + deflated(listing) + b"\xff\xff\xff\xff"
+    client, _ = connect(WELCOME + MODE_READER + server)
+
+    def compress_then_list() -> None:
+        client.compress()  # The bad bytes may already be buffered here
+        list(client.list_active())  # Or they are read during the response
+
+    with pytest.raises(nntp.NNTPDataError, match="Decompression failed"):
+        compress_then_list()
+    with pytest.raises(NNTPSyncError, match="closed or out of sync"):
+        client.date()
 
 
 def test_login_unexpected_multiline_reply_is_read(connect: Connect) -> None:

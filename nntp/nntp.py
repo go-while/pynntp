@@ -36,6 +36,7 @@ from . import utils
 from .fifo import BytesFifo
 from .headerdict import HeaderDict
 from .types import SSLMode
+from .utils import _MESSAGE_ID_RE
 from .yenc import YEnc, check_trailer, parse_keywords
 
 if TYPE_CHECKING:
@@ -60,10 +61,6 @@ __all__ = [
     "NNTPYEncError",
 ]
 
-
-# RFC 3977 section 3.6: "<", 1-248 printable US-ASCII characters except ">",
-# then ">"
-_MESSAGE_ID_RE = re.compile(r"<[!-=?-~]{1,248}>")
 
 # URL scheme -> (use_ssl, ssl_mode) for NNTPClient.from_url()
 _URL_SCHEMES = {
@@ -165,7 +162,57 @@ def _after_compress_forbidden(words: list[str]) -> bool:
 
 
 def _msgid_article(msgid_article: str | int | None) -> str | None:
-    return None if msgid_article is None else str(msgid_article)
+    """Format a message-id or article number argument; None is the current article.
+
+    Raises:
+        ValueError: If the argument is empty or blank, or a bool. An empty
+            argument would be dropped from the command, and a bool sent as
+            "True" or "False".
+    """
+    if msgid_article is None:
+        return None
+    if isinstance(msgid_article, bool) or (
+        isinstance(msgid_article, str) and not msgid_article.strip()
+    ):
+        raise ValueError(f"Invalid message-id or article number: {msgid_article!r}")
+    return str(msgid_article)
+
+
+def _stray_yend_error(
+    line: bytes, size: int, crc32: int, *, part: bool, dropped: bool, closed: bool
+) -> str | None:
+    """Check a =yend outside a block.
+
+    Args:
+        line: The =yend line.
+        size: Decoded length of the last closed block.
+        crc32: CRC32 of the last closed block.
+        part: The last closed block was a part of a multipart post.
+        dropped: Text was dropped since the last =yend.
+        closed: A block has been closed, so size and crc32 are its own.
+
+    Returns:
+        None if no text was dropped (a harmless stray) or the line repeats
+        the trailer of the last closed block (a duplicate), else a description
+        of the error: an early =yend has hidden the data of its block.
+    """
+    if not dropped:
+        return None
+    if closed and check_trailer(line, size, crc32, part=part) is None:
+        return None
+    return "=yend after data outside a block"
+
+
+def _item_lines(item: bytes) -> Iterator[bytes]:
+    """Split one item of a body iterable into lines.
+
+    An item may hold several LF-terminated lines. An empty item is one empty
+    line, and an item without LF ends its line at its end.
+    """
+    if item:
+        yield from io.BytesIO(item)
+    else:
+        yield item
 
 
 def _inflate(inflate: _Decompress, data: bytes) -> bytes:
@@ -193,7 +240,8 @@ class NNTPSyncError(NNTPError):
 
     Raised when a command is issued while the response to a previous command
     is still being read, or after a response was abandoned or failed part way
-    through, leaving unread data on the connection, or after close(). Call
+    through, leaving unread data on the connection, or after the server sent
+    more than a response (see NNTPProtocolError), or after close(). Call
     reconnect() to recover.
     """
 
@@ -228,7 +276,12 @@ class NNTPPermanentError(NNTPReplyError):
 
 
 class NNTPProtocolError(NNTPError):
-    """The server sent a status line that could not be parsed."""
+    """The server sent a status line that could not be parsed.
+
+    Also raised when a command finds data the server sent beyond the reply to
+    the previous command. The connection is then out of sync: nothing is sent,
+    and later commands raise NNTPSyncError until reconnect().
+    """
 
 
 class NNTPDataError(NNTPError):
@@ -245,6 +298,14 @@ class NNTPYEncError(NNTPDataError):
     def __init__(self, message: str, data: bytes) -> None:
         super().__init__(message)
         self.data = data
+
+    def __reduce__(
+        self,
+    ) -> tuple[type[NNTPYEncError], tuple[str, bytes], dict[str, object]]:
+        # Pickle and copy call cls(*args), but args holds only the message.
+        # Keep __dict__ too, as BaseException does, for notes and attributes.
+        message = self.args[0] if self.args else ""
+        return (type(self), (message, self.data), self.__dict__)
 
 
 class BaseNNTPClient:
@@ -285,16 +346,23 @@ class BaseNNTPClient:
                 Without TLS it is sent in clear text, as is the password.
             password: Password, sent if the server asks for authentication.
             timeout: Socket timeout in seconds, or None to wait forever.
-            use_ssl: Use TLS.
-            ssl_mode: IMPLICIT (TLS from the start, usually port 563) or STARTTLS.
+            use_ssl: Use TLS. ssl_mode and ssl_context only take effect with it.
+            ssl_mode: IMPLICIT (TLS from the start, usually port 563) or STARTTLS,
+                as an SSLMode or its value ("implicit", "starttls").
             ssl_context: TLS settings, e.g. to trust a private CA. Defaults to
                 ssl.create_default_context() with TLS 1.2 as the minimum,
-                which verifies the certificate.
+                which verifies the certificate. Ignored without use_ssl=True.
 
         Raises:
+            ValueError: If use_ssl is true and ssl_mode is not a valid
+                SSLMode. Nothing is connected, so a misspelt mode never falls
+                back to clear text.
             OSError: On socket or TLS errors.
             NNTPReplyError: If the server does not accept the connection.
         """
+        if use_ssl:
+            # A misspelt mode used to take neither TLS branch: plain text
+            ssl_mode = SSLMode(ssl_mode)
         self.username = username
         self.password = password
         if port is None:
@@ -310,13 +378,15 @@ class BaseNNTPClient:
         """Open the connection and read the welcome message."""
         self._buffer = BytesFifo()
         self._reading = False  # A multi-line response is being read
-        self._broken = False  # Closed, or unread/unknown data on the socket
         self._deflate: _Compress | None = None  # Set by COMPRESS (RFC 8054)
         self._inflate: _Decompress | None = None
         self._inflate_more = False  # _inflate may have more output pending
 
         host = self._address[0]
         self.socket = socket.create_connection(self._address, timeout=self._timeout)
+        # Only once the socket is open: if connecting fails, the client stays
+        # broken, as reconnect() closed it before calling this
+        self._broken = False  # Unread/unknown data on the socket, or closed
         try:
             if self._use_ssl and self._ssl_mode == SSLMode.IMPLICIT:
                 self._enable_tls(host)
@@ -340,7 +410,15 @@ class BaseNNTPClient:
 
         Use this to recover from NNTPSyncError. Session state such as the
         selected group, the current article and XFEATURE settings is not
-        restored.
+        restored. A response iterator opened before this call can't be resumed
+        afterwards: it raises NNTPSyncError.
+
+        If it raises, the client stays closed: commands raise NNTPSyncError
+        until reconnect() succeeds, so it can be called again.
+
+        Raises:
+            OSError: On socket or TLS errors, including a failed connect.
+            NNTPReplyError: If the server does not accept the connection.
         """
         self.close()
         self._connect()
@@ -521,16 +599,32 @@ class BaseNNTPClient:
         # Anything left over belongs to the next reply
         self._buffer.write(buf.read())
 
+    def _inflated_lines(
+        self, inflate: _Decompress, data: bytes, buf: BytesFifo
+    ) -> Iterator[bytes]:
+        """Decompress data into buf and yield the complete lines in buf."""
+        while True:
+            data = _inflate(inflate, data)
+            buf.write(data)
+            yield from self._lines(buf)
+            if len(data) < _INFLATE_SIZE:
+                return
+            data = b""  # More output may be pending
+
     def _info_yenczlib(self) -> Iterator[bytes]:
         """Yield the lines of a yEnc-encoded, zlib-compressed response.
 
         Used by XZVER and XZHDR. The lines are the same as _info_plain() would
-        give for the uncompressed command.
+        give for the uncompressed command, except that the last line may lack
+        its CRLF. Only the first =yend is checked; the lines after it are read
+        and ignored, except a second =ybegin, which is an error as the response
+        carries one block.
 
         Raises:
             NNTPDataError: If the yEnc header or trailer is bad, the size or CRC
-                check fails, decompression fails or ends early, or a line is
-                too long.
+                check fails, a second =ybegin follows the trailer, decompression
+                fails or ends early, a line is too long, or the unterminated end
+                of the data holds a bare LF.
         """
         decoder = YEnc()
         inflate = zlib.decompressobj(-15)
@@ -542,27 +636,34 @@ class BaseNNTPClient:
         if not header.startswith(b"=ybegin "):
             raise NNTPDataError("Bad yEnc header")
 
-        buf, trailer, size = BytesFifo(), b"", 0
+        buf, trailer, size, second_block = BytesFifo(), b"", 0, False
         for line in lines:
+            if trailer:  # Read to the terminator; only a second =ybegin is noted
+                second_block = second_block or line.startswith(b"=ybegin ")
+                continue
             if line.startswith(b"=yend"):
                 trailer = line
                 continue
             data = decoder.decode(line)
             size += len(data)
-            while True:
-                data = _inflate(inflate, data)
-                buf.write(data)
-                yield from self._lines(buf)
-                if len(data) < _INFLATE_SIZE:
-                    break
-                data = b""  # More output may be pending
+            yield from self._inflated_lines(inflate, data, buf)
 
         if not trailer:
             raise NNTPDataError("Missing yEnc trailer")
         if mismatch := check_trailer(trailer, size, decoder.crc32, part=False):
             raise NNTPDataError(f"Bad yEnc data: {mismatch}")
+        if second_block:
+            raise NNTPDataError("Bad yEnc data: second =ybegin after the trailer")
         if not inflate.eof:
             raise NNTPDataError("Decompression failed: compressed data is truncated")
+        # A finished stream may end without CRLF; do not lose its last row.
+        # An unterminated tail that holds a bare LF (a row or rows ended by LF,
+        # not CRLF) is refused. An LF row followed by a CRLF row is read as one
+        # row, as in 3.3.0.
+        if last := buf.read():
+            if b"\n" in last:
+                raise NNTPDataError("Bad XZ data: line ends without CRLF")
+            yield last
 
     def _info(self, code: int, message: str, yz: bool = False) -> Iterator[bytes]:
         """Return the lines of a multi-line response as bytes.
@@ -580,12 +681,27 @@ class BaseNNTPClient:
         else:
             lines = self._info_yenczlib() if yz else self._info_plain()
         self._reading = True  # Set now, not on first next()
-        return self._response(lines)
+        return self._response(lines, self._buffer)
 
-    def _response(self, lines: Iterator[bytes]) -> Iterator[bytes]:
-        buffer, complete = self._buffer, False
+    def _response(self, lines: Iterator[bytes], buffer: BytesFifo) -> Iterator[bytes]:
+        # buffer is taken when the response is registered, not on the first
+        # next(): an iterator first used after reconnect() must not adopt the
+        # new connection
+        complete = False
         try:
-            yield from lines
+            while True:
+                # After reconnect() or close() the next line would come from
+                # the new connection, or from none, not from this response
+                if self._buffer is not buffer:
+                    raise NNTPSyncError(
+                        "Response iterator used after reconnect() or close(); "
+                        "its response is gone"
+                    )
+                try:
+                    line = next(lines)
+                except StopIteration:
+                    break
+                yield line
             complete = True
         finally:
             # An iterator abandoned before reconnect() must not touch the new
@@ -658,7 +774,10 @@ class BaseNNTPClient:
                 first, so the connection stays in sync.
             NNTPTemporaryError: For status codes 400-499.
             NNTPPermanentError: For status codes 500-599.
-            NNTPProtocolError: If the status line can't be parsed.
+            NNTPProtocolError: If the status line can't be parsed, or the server
+                sent data beyond the reply to the previous command. In the
+                second case nothing is sent. Either way the connection is
+                then out of sync.
         """
         code, message = self._command(verb, args)
         if expect is not None:
@@ -673,6 +792,23 @@ class BaseNNTPClient:
             for _ in self._info(code, message):
                 pass
         raise NNTPReplyError(code, message)
+
+    def _check_nothing_unread(self) -> None:
+        """Raise NNTPProtocolError if the server sent more than the last reply.
+
+        Anything still buffered would be taken for the reply to the next
+        command, and every later reply would be shifted by one.
+
+        Raises:
+            NNTPProtocolError: If received data is unread. Called inside
+                _sync(), so the connection is then marked out of sync.
+        """
+        if self._inflate_more:
+            # Output the last read left in the decompressor still counts. Data
+            # that inflates to nothing, such as a sync flush, does not.
+            self._buffer.write(self._decompress(b""))
+        if len(self._buffer):
+            raise NNTPProtocolError("Unexpected data from the server after the reply")
 
     def _command(
         self, verb: str, args: str | None, *, login: bool = True
@@ -698,6 +834,7 @@ class BaseNNTPClient:
             raise ValueError(f"Command longer than {_MAX_COMMAND} octets: {shown!r}")
 
         with self._sync():
+            self._check_nothing_unread()
             self._send(line)
             try:
                 return self.status()
@@ -774,9 +911,13 @@ class BaseNNTPClient:
     def close(self) -> None:
         """Close the connection without sending QUIT.
 
-        After this, only reconnect() can be used.
+        After this, only reconnect() can be used. A response iterator still open
+        can't be resumed: it raises NNTPSyncError, as after reconnect().
         """
         self._broken = True
+        # An open response is gone: its iterator's finally won't reset this
+        self._reading = False
+        self._buffer = BytesFifo()  # Lines already buffered are not for the client
         self.socket.close()
 
 
@@ -790,7 +931,9 @@ class NNTPClient(BaseNNTPClient):
     to the end before issuing the next command; abandoning one part way leaves
     the connection out of sync (see NNTPSyncError and reconnect()). That
     includes never reading it: calling e.g. xover() and dropping the result
-    blocks the connection until reconnect().
+    blocks the connection until reconnect(). An iterator still open when
+    close() is called, or when a with block exits, can't be resumed either:
+    it raises NNTPSyncError.
 
     Any command can raise NNTPReplyError (and its subclasses), NNTPSyncError,
     NNTPProtocolError, NNTPDataError (e.g. for a line longer than
@@ -819,14 +962,17 @@ class NNTPClient(BaseNNTPClient):
                 Without TLS it is sent in clear text, as is the password.
             password: Password, sent if the server asks for authentication.
             timeout: Socket timeout in seconds, or None to wait forever.
-            use_ssl: Use TLS.
-            ssl_mode: IMPLICIT (TLS from the start, usually port 563) or STARTTLS.
+            use_ssl: Use TLS. ssl_mode and ssl_context only take effect with it.
+            ssl_mode: IMPLICIT (TLS from the start, usually port 563) or STARTTLS,
+                as an SSLMode or its value ("implicit", "starttls").
             ssl_context: TLS settings, e.g. to trust a private CA. Defaults to
                 ssl.create_default_context() with TLS 1.2 as the minimum,
-                which verifies the certificate.
+                which verifies the certificate. Ignored without use_ssl=True.
             reader: Send MODE READER after connecting, and after reconnect().
 
         Raises:
+            ValueError: If use_ssl is true and ssl_mode is not a valid
+                SSLMode. Nothing is connected.
             OSError: On socket or TLS errors.
             NNTPReplyError: If the server does not accept the connection.
         """
@@ -857,7 +1003,8 @@ class NNTPClient(BaseNNTPClient):
 
         Keyword arguments override the URL, and the constructor's defaults
         apply to anything set by neither. Passing the password as an argument
-        keeps it out of the URL, which tends to end up in logs.
+        keeps it out of the URL, which tends to end up in logs. An ssl_context
+        only takes effect with an nntps://, snews:// or nntp+starttls:// URL.
 
         Args:
             url: The server URL. It may not have a path or fragment.
@@ -1279,6 +1426,10 @@ class NNTPClient(BaseNNTPClient):
 
         parts = message.split(None, 4)
         try:
+            if len(parts) < 4 or any(
+                not (part.isascii() and part.isdecimal()) for part in parts[:3]
+            ):
+                raise ValueError("Invalid GROUP numbers")
             total = int(parts[0])
             first = int(parts[1])
             last = int(parts[2])
@@ -1378,6 +1529,8 @@ class NNTPClient(BaseNNTPClient):
             message-id is given.
 
         Raises:
+            ValueError: If the message-id or article number is empty or blank,
+                or a bool. Nothing is sent.
             NNTPReplyError: If there is no such article.
             NNTPDataError: If the reply can't be parsed.
         """
@@ -1424,17 +1577,25 @@ class NNTPClient(BaseNNTPClient):
         raised, so the connection stays in sync.
 
         Only lines between =ybegin and =yend are decoded; text outside them,
-        such as a signature, is dropped.
+        such as a signature, is dropped. A stray =yend outside a block is
+        ignored, unless text was dropped since the last =yend (or the start of
+        the body). Only empty lines are not text; a line of spaces is data
+        (a space encodes byte 0xF6). After dropped text, a stray =yend is
+        accepted if it matches the last closed block (a duplicate trailer after
+        a signature); otherwise an early =yend has hidden the data of its
+        block, which is an error.
 
         Raises:
             NNTPYEncError: If yEnc data does not match its trailer, a =ybegin
-                has no =yend, or there is no =ybegin. The decoded body is in
-                its data attribute.
+                has no =yend, there is no =ybegin, or a =yend follows text
+                outside a block and does not match the last closed block. The
+                decoded body is in its data attribute.
         """
         body: list[bytes] = []
         encoded: list[bytes] = []  # yEnc data lines not yet decoded
         decoder, size, multipart, open_block = YEnc(), 0, False, False
         seen_block = False
+        dropped = False  # Text dropped outside a block since the last =yend
         error: str | None = None
 
         def decode_pending() -> None:
@@ -1448,17 +1609,31 @@ class NNTPClient(BaseNNTPClient):
 
         for line in lines:
             if line[:2] != b"=y":
-                if open_block:  # Text outside blocks (e.g. a signature) is dropped
+                if open_block:
                     encoded.append(line)
+                else:  # Text outside blocks (e.g. a signature) is dropped
+                    dropped |= line not in (b"", b"\r\n", b"\n")
                 continue
             decode_pending()
             if line.startswith(b"=ybegin "):
+                # A =ybegin while a block is open: that block never got its =yend
+                error = error or ("missing =yend trailer" if open_block else None)
                 decoder, size, open_block, seen_block = YEnc(), 0, True, True
                 multipart = "part" in parse_keywords(line)
             elif line.startswith(b"=yend"):
-                mismatch = check_trailer(line, size, decoder.crc32, part=multipart)
+                if open_block:
+                    mismatch = check_trailer(line, size, decoder.crc32, part=multipart)
+                else:  # A stray: a duplicate, or an early =yend after text
+                    mismatch = _stray_yend_error(
+                        line,
+                        size,
+                        decoder.crc32,
+                        part=multipart,
+                        dropped=dropped,
+                        closed=seen_block,
+                    )
                 error = error or mismatch
-                open_block = False
+                open_block, dropped = False, False
             # =ypart and other =y lines carry nothing to decode
 
         decode_pending()
@@ -1489,8 +1664,12 @@ class NNTPClient(BaseNNTPClient):
             The article number, headers and body. The body is bytes.
 
         Raises:
+            ValueError: If the message-id or article number is empty or blank,
+                or a bool. Nothing is sent.
             NNTPReplyError: If there is no such article.
-            NNTPDataError: If the reply or headers can't be parsed.
+            NNTPDataError: If the reply or headers can't be parsed. If the
+                headers can't be parsed, the rest of the response (the body) is
+                read first, so the connection stays in sync.
             NNTPYEncError: If yEnc data fails its size or CRC check. The decoded
                 body is in its data attribute.
         """
@@ -1501,8 +1680,14 @@ class NNTPClient(BaseNNTPClient):
         # Headers and body come from one response: parse_headers() stops at
         # the blank line and _read_body() reads the rest.
         lines = self._info(code, message)
-        with self._data_errors("article headers"):
+        try:
             headers = utils.parse_headers(self._decode(lines))
+        except ValueError as e:
+            # parse_headers() stopped at the bad line: read the rest of the
+            # response, so the connection stays in sync
+            for _ in lines:
+                pass
+            raise NNTPDataError(f"Invalid article headers: {e}") from e
         body = self._read_body(lines, decode=decode)
 
         # Parsed only now, so a bad number never leaves the article unread
@@ -1524,16 +1709,23 @@ class NNTPClient(BaseNNTPClient):
                 uses the current article.
 
         Returns:
-            The article headers.
+            The article headers. Only the lines before the first blank line are
+            headers; any lines after it are read and ignored.
 
         Raises:
+            ValueError: If the message-id or article number is empty or blank,
+                or a bool. Nothing is sent.
             NNTPReplyError: If there is no such article.
-            NNTPDataError: If the headers can't be parsed.
+            NNTPDataError: If the headers can't be parsed. The whole response
+                is read first, so the connection stays in sync.
         """
         code, message = self.command("HEAD", _msgid_article(msgid_article), expect=221)
 
+        # Read the whole response before parsing: parse_headers() stops at a
+        # blank or bad line, and the rest must not be left unread. HEAD is small.
+        lines = list(self._info(code, message))
         with self._data_errors("article headers"):
-            return utils.parse_headers(self.info(code, message))
+            return utils.parse_headers(self._decode(iter(lines)))
 
     def body(
         self,
@@ -1553,6 +1745,8 @@ class NNTPClient(BaseNNTPClient):
             The article body.
 
         Raises:
+            ValueError: If the message-id or article number is empty or blank,
+                or a bool. Nothing is sent.
             NNTPReplyError: If there is no such article.
             NNTPYEncError: If yEnc data fails its size or CRC check. The decoded
                 body is in its data attribute.
@@ -1572,15 +1766,23 @@ class NNTPClient(BaseNNTPClient):
             args += " " + utils.unparse_msgid_range(msgid_range)
 
         code, message = self.command(verb, args, expect=225 if verb == "HDR" else 221)
-        return self._number_values(verb, self.info(code, message, yz=verb == "XZHDR"))
+        return self._number_values(
+            verb,
+            self.info(code, message, yz=verb == "XZHDR"),
+            allow_msgid=isinstance(msgid_range, str),
+        )
 
     def _number_values(
-        self, verb: str, lines: Iterator[str]
+        self, verb: str, lines: Iterator[str], allow_msgid: bool
     ) -> Iterator[tuple[int, str]]:
-        """Parse "<article number> <value>" lines, as sent by HDR and XPAT."""
+        """Parse "<article number> <value>" lines, as sent by HDR and XPAT.
+
+        allow_msgid is True if the request was by message-id, the only case
+        where a message-id line (number 0) can be the answer.
+        """
         for line in lines:
             with self._data_errors(f"{verb} response"):
-                number, value = utils.parse_number_value(line)
+                number, value = utils.parse_number_value(line, allow_msgid=allow_msgid)
             yield number, value
 
     def hdr(
@@ -1602,8 +1804,11 @@ class NNTPClient(BaseNNTPClient):
             0 when a message-id is given.
 
         Raises:
+            ValueError: If msgid_range is empty or blank, or not a valid range.
+                Nothing is sent.
             NNTPReplyError: If there is no such article.
-            NNTPDataError: If a line can't be parsed.
+            NNTPDataError: If a line can't be parsed, or if a message-id line
+                answers a request that was not by message-id.
         """
         return self._hdr(header, msgid_range)
 
@@ -1615,6 +1820,10 @@ class NNTPClient(BaseNNTPClient):
         """XHDR command, the RFC 2980 form of HDR. See hdr().
 
         Prefer hdr() when the server lists HDR in its capabilities.
+
+        Raises:
+            ValueError: If msgid_range is empty or blank, or not a valid range.
+                Nothing is sent.
         """
         return self._hdr(header, msgid_range, verb="XHDR")
 
@@ -1623,7 +1832,12 @@ class NNTPClient(BaseNNTPClient):
         header: str,
         msgid_range: str | Range | None = None,
     ) -> Iterator[tuple[int, str]]:
-        """XZHDR command, a compressed XHDR. See hdr()."""
+        """XZHDR command, a compressed XHDR. See hdr().
+
+        Raises:
+            ValueError: If msgid_range is empty or blank, or not a valid range.
+                Nothing is sent.
+        """
         return self._hdr(header, msgid_range, verb="XZHDR")
 
     @cached_property
@@ -1646,15 +1860,15 @@ class NNTPClient(BaseNNTPClient):
         range: str | Range | None = None,
         verb: str = "XOVER",
     ) -> Iterator[tuple[int, HeaderDict]]:
+        args = None
+        if range is not None:
+            args = utils.unparse_msgid_range(range)
+
         # get overview fmt before entering generator
         names = self.overview_fmt
         keys = tuple(name.casefold() for name in names)
         # "full" fields include the header name in the value (RFC 3977 8.4.2)
         full = [i for i, (_, is_full) in enumerate(self._overview_fields) if is_full]
-
-        args = None
-        if range is not None:
-            args = utils.unparse_msgid_range(range)
 
         code, message = self.command(verb, args, expect=224)
         lines = self.info(code, message, yz=verb == "XZVER")
@@ -1694,6 +1908,8 @@ class NNTPClient(BaseNNTPClient):
             come from overview_fmt; "full" fields have the header name removed.
 
         Raises:
+            ValueError: If range is empty or blank, or not a valid range. Nothing
+                is sent.
             NNTPReplyError: If there is no such article or no newsgroup selected.
             NNTPDataError: If a line can't be parsed.
         """
@@ -1724,6 +1940,8 @@ class NNTPClient(BaseNNTPClient):
             xover(). The article number is 0 when a message-id is given.
 
         Raises:
+            ValueError: If msgid_range is empty or blank, or not a valid range.
+                Nothing is sent.
             NNTPReplyError: If there is no such article or no newsgroup
                 selected.
             NNTPDataError: If a line can't be parsed.
@@ -1752,13 +1970,18 @@ class NNTPClient(BaseNNTPClient):
             The article number and header value of each matching article.
 
         Raises:
+            ValueError: If msgid_range is empty or blank, or not a valid range.
+                Nothing is sent.
             NNTPReplyError: If there is no such article.
-            NNTPDataError: If a line can't be parsed.
+            NNTPDataError: If a line can't be parsed, or if a message-id line
+                answers a request that was not by message-id.
         """
         args = " ".join([header, utils.unparse_msgid_range(msgid_range), *pattern])
 
         code, message = self.command("XPAT", args, expect=221)
-        return self._number_values("XPAT", self.info(code, message))
+        return self._number_values(
+            "XPAT", self.info(code, message), allow_msgid=isinstance(msgid_range, str)
+        )
 
     def xfeature_compress_gzip(self, terminator: bool = False) -> None:
         """XFEATURE COMPRESS GZIP command.
@@ -1791,11 +2014,14 @@ class NNTPClient(BaseNNTPClient):
         Args:
             headers: The article headers.
             body: The body as str, bytes, or an iterable of byte lines such as a
-                binary file.
+                binary file. Each item is one or more complete lines: items
+                are split at LF, and an item without LF still ends a line, so
+                pass lines, not arbitrary chunks.
 
         Returns:
-            The message-id if the server's reply includes one (common, though not
-            standard), otherwise True.
+            The message-id if it is the first reply token or follows INN's
+            "Article received" prefix (common, though not standard), otherwise
+            True.
 
         Raises:
             ValueError: If a header name or value is invalid (see
@@ -1809,9 +2035,13 @@ class NNTPClient(BaseNNTPClient):
         hdrs = utils.unparse_headers(headers or {})
         message = self._transfer("POST", None, hdrs, body, ready=340, done=240)
 
-        # Servers often include the message-id, e.g. INN's "Article received <id>"
-        match = _MESSAGE_ID_RE.search(message)
-        return match.group() if match else True
+        # Only recognize known reply positions, not addresses in free text.
+        parts = message.split()
+        if [word.casefold() for word in parts[:2]] == ["article", "received"]:
+            parts = parts[2:]
+        if parts and _MESSAGE_ID_RE.fullmatch(parts[0]):
+            return parts[0]
+        return True
 
     def ihave(
         self,
@@ -1872,6 +2102,9 @@ class NNTPClient(BaseNNTPClient):
             code, message = self.command(verb, args, expect=ready)
 
             with self._sync():
+                # Data that came with the ready reply, such as a fake final
+                # reply, would be taken for the answer to the article
+                self._check_nothing_unread()
                 while chunk := article.read(_SEND_SIZE):
                     self._send(chunk)
                 code, message = self.status()
@@ -1886,17 +2119,23 @@ class NNTPClient(BaseNNTPClient):
     ) -> Iterator[IO[bytes]]:
         """Build the article on the wire: headers, dot-stuffed CRLF body, ".".
 
+        Each item of a body iterable ends a line, and items are split at LF, so
+        an item may hold several lines; an item without LF ends its line at its
+        end.
+
         Raises:
             NNTPDataError: If a body line contains CR or NUL.
         """
         if isinstance(body, str):
             body = body.encode(self.encoding, self.errors)
         if isinstance(body, bytes):
-            body = io.BytesIO(body)
+            lines: Iterable[bytes] = io.BytesIO(body)
+        else:
+            lines = itertools.chain.from_iterable(map(_item_lines, body))
 
         with tempfile.SpooledTemporaryFile(max_size=_SPOOL_SIZE) as article:
             article.write(hdrs.encode(self.encoding, self.errors))
-            for line in body:
+            for line in lines:
                 if line.startswith(b"."):
                     line = b"." + line
                 if line.endswith(b"\n"):

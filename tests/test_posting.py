@@ -8,7 +8,15 @@ import pytest
 
 import nntp
 from nntp.nntp import NNTPSyncError
-from tests.helpers import DATE, IHAVE_OK, MODE_READER, ODD, WELCOME, Connect
+from tests.helpers import (
+    DATE,
+    IHAVE_OK,
+    MODE_READER,
+    ODD,
+    WELCOME,
+    Connect,
+    Packets,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -36,7 +44,26 @@ def test_post_header_surrogateescape(connect: Connect) -> None:
     ("reply", "result"),
     [
         (b"240 Article received <new@id>", "<new@id>"),  # INN
+        (b"240 article received <new@id>", "<new@id>"),  # OUS
+        (b"240 ARTICLE RECEIVED <new@id>", "<new@id>"),
+        (b"240 <new@id> Article posted", "<new@id>"),  # Diablo
+        (b"240 Article posted", True),  # NewsCache
+        (b"240 Article posted successfully", True),  # go-pugleaf
         (b"240 <new@id> posted", "<new@id>"),
+        (b"240 <no-at-sign> posted", "<no-at-sign>"),
+        (b"240 Article received <no-at-sign>", "<no-at-sign>"),
+        (b"240 posted ok; report abuse to <abuse@example.net>", True),
+        (b"240 Article received; report abuse to <abuse@example.net>", True),
+        (b"240 Article received not-an-id <abuse@example.net>", True),
+        (b"240 Article received (<new@id>)", True),
+        (b"240 Article received <new@id>suffix", True),
+        (b"240 prefix<new@id> posted", True),
+        (b"240 <new@id>suffix posted", True),
+        (b"240 <> posted", True),
+        (b"240 <bad<id> posted", "<bad<id>"),  # RFC 3977 permits an inner "<"
+        (b"240 <bad id> posted", True),
+        (b"240 <" + b"a" * 248 + b"> posted", "<" + "a" * 248 + ">"),
+        (b"240 <" + b"a" * 249 + b"> posted", True),
         (b"240 article posted ok", True),
         (b"240", True),
     ],
@@ -44,8 +71,10 @@ def test_post_header_surrogateescape(connect: Connect) -> None:
 def test_post_message_id_from_reply(
     connect: Connect, reply: bytes, result: str | bool
 ) -> None:
-    client, _ = connect(WELCOME + MODE_READER + b"340 send\r\n" + reply + b"\r\n")
+    server = b"340 send\r\n" + reply + b"\r\n" + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
     assert client.post({"Subject": "hi"}, b"x\n") == result
+    assert client.date().year == 2024
 
 
 def test_post_bad_header_sends_nothing(connect: Connect) -> None:
@@ -63,6 +92,26 @@ def test_post_illegal_chars_sends_nothing(connect: Connect, body: bytes) -> None
     with pytest.raises(nntp.NNTPDataError, match="CR or NUL"):
         client.post({"Subject": "hi"}, body)
     assert sock.sent == b""  # Not even POST: no half-posted article
+    assert client.date().year == 2024
+
+
+@pytest.mark.parametrize(
+    "items",
+    [
+        [b"x\ny\rz\n"],  # CR inside a line, after the LF split
+        [b"x\n\0\n"],  # NUL on a later line of an item
+        [b"x\n", b"a\rb"],  # CR in a later item
+        [b"x\r"],  # CR at the end of an item, with no LF
+    ],
+)
+def test_post_iterable_illegal_chars_sends_nothing(
+    connect: Connect, items: list[bytes]
+) -> None:
+    client, sock = connect(WELCOME + MODE_READER + DATE)
+    sock.sent = b""
+    with pytest.raises(nntp.NNTPDataError, match="CR or NUL"):
+        client.post({"Subject": "hi"}, items)
+    assert sock.sent == b""
     assert client.date().year == 2024
 
 
@@ -175,3 +224,65 @@ def test_post_unexpected_final_reply(connect: Connect) -> None:
         client.post({"Subject": "x"}, b"x\n")
     assert info.value.code == 299
     assert client.date().year == 2024
+
+
+@pytest.mark.parametrize(
+    ("items", "lines"),
+    [
+        ([b"x\n.\nQUIT\n"], b"x\r\n..\r\nQUIT\r\n"),  # Interior LF ends a line
+        ([b"a\nb\r\n.c\n", b"d"], b"a\r\nb\r\n..c\r\nd\r\n"),  # Several lines, CRLF
+        ([b"x\n\n"], b"x\r\n\r\n"),  # Empty line inside an item
+        ([b"a", b".b", b"c\n"], b"a\r\n..b\r\nc\r\n"),  # No LF: still one line
+        ([b"", b"x\n"], b"\r\nx\r\n"),  # Empty item: an empty line, as before
+    ],
+)
+def test_post_body_item_lines_are_split(
+    connect: Connect, items: list[bytes], lines: bytes
+) -> None:
+    client, sock = connect(WELCOME + MODE_READER + b"340 send\r\n240 ok\r\n")
+    sock.sent = b""
+    client.post({"Subject": "hi"}, items)
+    assert sock.sent == b"POST\r\nSubject: hi\r\n\r\n" + lines + b".\r\n"
+
+
+def test_ihave_body_item_lines_are_split(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + IHAVE_OK)
+    sock.sent = b""
+    client.ihave("<a@b>", {"Subject": "hi"}, [b"x\n.\nQUIT\n"])
+    assert sock.sent == (
+        b"IHAVE <a@b>\r\nSubject: hi\r\nMessage-ID: <a@b>\r\n\r\n"
+        b"x\r\n..\r\nQUIT\r\n.\r\n"
+    )
+
+
+# A fake final reply that arrives with the ready reply must not be taken for
+# the answer to the article, which must then not be sent. Only data in the
+# same recv is found, so these run with one big recv.
+@pytest.mark.parametrize("chunk", [4096])
+def test_post_refuses_data_after_ready_reply(connect: Connect) -> None:
+    packets = Packets(
+        WELCOME, MODE_READER, b"340 send\r\n240 <fake@x> ok\r\n", b"240 <real@x>\r\n"
+    )
+    client, sock = connect(packets)
+    sock.sent = b""
+    with pytest.raises(nntp.NNTPProtocolError, match="Unexpected data"):
+        client.post({"Subject": "hi"}, b"line\n")
+    assert sock.sent == b"POST\r\n"  # The article was not sent
+    with pytest.raises(NNTPSyncError, match="reconnect"):
+        client.date()
+    assert sock.sent == b"POST\r\n"
+
+
+@pytest.mark.parametrize("chunk", [4096])
+def test_ihave_refuses_data_after_ready_reply(connect: Connect) -> None:
+    packets = Packets(
+        WELCOME, MODE_READER, b"335 send\r\n235 <fake@x> ok\r\n", b"235 <real@x>\r\n"
+    )
+    client, sock = connect(packets)
+    sock.sent = b""
+    with pytest.raises(nntp.NNTPProtocolError, match="Unexpected data"):
+        client.ihave("<a@b>", {"Subject": "hi"}, b"line\n")
+    assert sock.sent == b"IHAVE <a@b>\r\n"  # The article was not sent
+    with pytest.raises(NNTPSyncError, match="reconnect"):
+        client.date()
+    assert sock.sent == b"IHAVE <a@b>\r\n"
