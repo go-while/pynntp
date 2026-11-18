@@ -1,4 +1,4 @@
-Both pre-commit and CI run Ruff’s linter and formatter, and both pin Ruff 0.17.4. I found no TODO/FIXME markers in the Python files. I’m checking the remaining rule-selection and formatter-compatibility questions by reading only; I cannot run the mandated `the rules` integrity check under this session’s restrictions.
+Both pre-commit and CI run Ruff’s linter and formatter, and both pin Ruff 0.17.4. I found no TODO/FIXME markers in the Python files. I’m checking the remaining rule-selection and formatter-compatibility questions by reading only; I cannot run the mandated `/etc/agents` integrity check under this session’s restrictions.
 The GitHub Actions workflow itself runs mypy and tests; Ruff runs through the pre-commit hooks used by pre-commit.ci. The new FBT exemptions remove no prior coverage—FBT was previously disabled—and the test exemption matches existing parametrized boolean arguments while leaving FBT002/FBT003 enabled.
 ## Result
 
@@ -14,6 +14,6 @@ The GitHub Actions workflow itself runs mypy and tests; Ruff runs through the pr
 
 ### Not independently checked
 
-No commands, lint, formatting or tests were run. Ruff’s 0.17.4 implementation/rule catalogue was unavailable in the checkout, so I could not exhaustively verify deprecated-rule selection differences, removed/preview-rule handling, or every formatter interaction. Supplied CI results were accepted, not independently verified. The mandatory `the rules` integrity command also could not be executed under the read-only restrictions.
+No commands, lint, formatting or tests were run. Ruff’s 0.17.4 implementation/rule catalogue was unavailable in the checkout, so I could not exhaustively verify deprecated-rule selection differences, removed/preview-rule handling, or every formatter interaction. Supplied CI results were accepted, not independently verified. The mandatory `/etc/agents` integrity command also could not be executed under the read-only restrictions.
 
 #177: 9.5, 0 findings (0H/0M/0L): -

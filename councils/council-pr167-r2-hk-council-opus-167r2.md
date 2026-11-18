@@ -1,7 +1,7 @@
 # Council #167 round 2: hk-council-opus-167r2 (Claude Opus 5.5, by reading)
 
 Head 090f7ec, delta fdd9408..090f7ec (CONTRIBUTING.md, tests/integration/inn2/test_inn2.py).
-Rules hash check in the rules: OK. Nothing was run, by reading only (G1). I checked
+Rules hash check in /etc/agents: OK. Nothing was run, by reading only (G1). I checked
 that `git diff --stat fdd9408 090f7ec` in the repo matches the patch (2 files, +49/-20).
 
 ## Round-1 findings

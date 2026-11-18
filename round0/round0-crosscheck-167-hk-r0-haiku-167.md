@@ -1,8 +1,8 @@
 # Round-0 cross-check, PR #167 (hk-r0-haiku-167)
 
-Head 54cb6e0, checked by reading the clean checkout (council-167/checkout) and nntp/nntp.py. Nothing run here (G1). The test-host numbers from the lead (host 117) are not verified by me.
+Head 54cb6e0, checked by reading the clean checkout (/claude/projects/pynntp/pynntp-tools/council-167/checkout) and nntp/nntp.py. Nothing run here (G1). The test-host numbers from the lead (host 117) are not verified by me.
 
-Correction to my earlier report: finding 1's location was written garbled in the handback (a garbled path). The correct path is council-167/checkout/tests/integration/inn2/test_inn2.py:402-409.
+Correction to my earlier report: finding 1's location was written garbled in the handback ("/tank0/efs/... no: /tmp checkout"). The correct path is /claude/projects/pynntp/pynntp-tools/council-167/checkout/tests/integration/inn2/test_inn2.py:402-409.
 
 ## Other reviewers' findings
 

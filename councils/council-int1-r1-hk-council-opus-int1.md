@@ -1,7 +1,7 @@
 # Council int-1, round 1: hk-council-opus-int1 (Claude Opus 5.5)
 
 Head e650e29 (integration-1), base 2bfca17 (3.3.0). Scope: only what the 19
-nntp/ PRs do together. Rules files the rules verified (sha512sum -c HASH.md OK);
+nntp/ PRs do together. Rules files /etc/agents verified (sha512sum -c HASH.md OK);
 G1 respected: nothing ran on this machine, apart from reading and git.
 
 ## What I did
@@ -24,9 +24,9 @@ G1 respected: nothing ran on this machine, apart from reading and git.
   (keyword-only `allow_msgid`) that the fetched ref upstream-pr/174 (9004229)
   does not have (see notes). Every PR head except #174 is an ancestor of
   integration-1. Every `test_*` function each PR adds exists at the head.
-- Ran one probe on a test host (job 514 on a test host, via vm-run.sh): a
+- Ran one probe on a test host (job 514 on 10.10.11.105, via vm-run.sh): a
   pytest file of 11 cross-PR scenarios x 3 recv chunk sizes in a scratch copy
-  (scratch/int1-hk/tests/test_int1_interactions.py).
+  (/home/fed/.claude/jobs/b746665a/tmp/int1-hk/tests/test_int1_interactions.py).
   Result: 32 passed, 1 failed; the failure is the expected #187 limit (note 3),
   not an interaction. Scenarios:
   1. #174 row rejected via `_data_errors` (marks broken), then reconnect(), a

@@ -1,10 +1,10 @@
 You are a fact checker for public texts of pynntp, a Python NNTP client library (upstream greenbender/pynntp, release 3.3.0 = base 2bfca17). Five pull request descriptions are now public and marked ready for review: #182, #183, #185, #186, #171. Check every factual claim in them; nothing else (not code quality, not style).
 
 Material:
-- The five PR texts: council-facts-b1/pr-texts.md (the head commit of each PR is named there).
+- The five PR texts: /claude/projects/pynntp/pynntp-tools/council-facts-b1/pr-texts.md (the head commit of each PR is named there).
 - The working directory is a clean checkout of the BASE (3.3.0), for "before" claims. The attached file holds each PR's diff base...head, for "after" claims (code, tests, docstrings, README).
 - GitHub, read-only: `gh pr view <n> -R greenbender/pynntp`, `gh api repos/greenbender/pynntp/...` GET (files at a PR head: `gh api "repos/greenbender/pynntp/contents/<path>?ref=<head sha>"`; issues: `gh api repos/greenbender/pynntp/issues/<n>`; commit messages: `gh api repos/greenbender/pynntp/commits/<sha>`; CI: `.../commits/<sha>/check-runs`).
-- Review reports (for the "council r<N>: ..." score lines and for measurements): upstream-gap/, files named council-fix-post-body-item-lines-*, round0-post-body-item-lines-* (#182), council-fix-yenc-keyword-regex-* (#183), council-fix-head-read-all-* (#185), council-fix-ssl-context-plaintext-* (#186), council-pr171-* (#171); reviewx-summary.md and deep-fixes-status.md (tracker).
+- Review reports (for the "council r<N>: ..." score lines and for measurements): /claude/projects/pynntp/pynntp-tools/upstream-gap/, files named council-fix-post-body-item-lines-*, round0-post-body-item-lines-* (#182), council-fix-yenc-keyword-regex-* (#183), council-fix-head-read-all-* (#185), council-fix-ssl-context-plaintext-* (#186), council-pr171-* (#171); reviewx-summary.md and deep-fixes-status.md (tracker).
 
 The claims to check, with where the evidence should be:
 #182 (head 2ddb15b)

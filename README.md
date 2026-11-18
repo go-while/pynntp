@@ -10,4 +10,4 @@ Review reports behind the "council" score lines in the go-while PRs to greenbend
 | `fact-checks/` | fact checks of public texts: the batch-1 PR texts and the #166 update |
 | `briefs/` | the briefs some councils worked from |
 
-The round label in a PR's score line counts that PR's own council rounds, so it can differ from the batch round in a file name. Local paths, test-host addresses and internal tool names are replaced with neutral words. Reviews by reading never claim that tests passed; test results are in the commit messages and in #166.
+The round label in a PR's score line counts that PR's own council rounds, so it can differ from the batch round in a file name. Reviews by reading never claim that tests passed; test results are in the commit messages and in #166.

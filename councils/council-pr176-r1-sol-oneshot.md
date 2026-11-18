@@ -7,6 +7,6 @@
 
 **Notes:** No non-finding concerns.
 
-**Not checked:** runtime tests, builds, live servers, unrelated defects, or independent verification of commit identities. The read-only restriction also prevented SHA-512/ownership verification of `the rules`; no commands were run.
+**Not checked:** runtime tests, builds, live servers, unrelated defects, or independent verification of commit identities. The read-only restriction also prevented SHA-512/ownership verification of `/etc/agents`; no commands were run.
 
 #176: 10, 0 findings (H/M/L): -

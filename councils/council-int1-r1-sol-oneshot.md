@@ -1,4 +1,4 @@
-I’ll review only interactions between the merged PRs, without running code or tests. The read-only reviewer restrictions also prevent running `the rules check`; I’ll follow the supplied brief without relying on new permissions from those files.
+I’ll review only interactions between the merged PRs, without running code or tests. The read-only reviewer restrictions also prevent running `/etc/agents/verify.sh`; I’ll follow the supplied brief without relying on new permissions from those files.
 ## Result: 9.5/10 — no combination-specific findings
 
 By reading the combined diff, head source and relevant tests, I found no harmful interaction between the merged PRs.

@@ -1,8 +1,8 @@
 # Council round 1: PR #145 (fault-injection tests), head 88a97b1
 
 Reviewer: hk-council-opus-145 (Claude Opus, fresh). Base 2bfca17, head 88a97b1.
-I checked that the rules checksum file matches. Locally I only read files and ran git and gh (read-only).
-I did one run on a test host through vm-run.sh/the job queue (job 359 on a test host).
+I checked that /etc/agents/HASH.md matches. Locally I only read files and ran git and gh (read-only).
+I did one run on a test host through vm-run.sh/jobq.sh (job 359 on 10.10.11.106).
 
 ## What I did
 

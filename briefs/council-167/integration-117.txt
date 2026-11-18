@@ -1,5 +1,5 @@
 ##### checkout
-vm-run: job 312 on a test host
+vm-run: job 312 on 10.10.11.117
 active
 2
         before attempting to connect.  If no *timeout* is supplied, the
@@ -28,7 +28,7 @@ E               ConnectionRefusedError: [Errno 111] Connection refused
 /usr/lib/python3.13/socket.py:849: ConnectionRefusedError
 4 failed, 31 passed in 4.29s
 ##### base-copy
-vm-run: job 313 on a test host
+vm-run: job 313 on 10.10.11.117
 active
 2
         before attempting to connect.  If no *timeout* is supplied, the

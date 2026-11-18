@@ -1,4 +1,4 @@
-The new validation rejects all three reported malformed names while preserving metadata and trailing whitespace behavior. I cannot verify `the rules` hashes or ownership with the permitted read-only tools; no execution or host work will be attempted.
+The new validation rejects all three reported malformed names while preserving metadata and trailing whitespace behavior. I cannot verify `/etc/agents` hashes or ownership with the permitted read-only tools; no execution or host work will be attempted.
 ## Review: no findings
 
 **Score: 10/10 — ready to merge.**

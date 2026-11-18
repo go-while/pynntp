@@ -4,7 +4,7 @@ Head e07f041 (integration-1), base 2bfca17 (3.3.0). Read completely: nntp/nntp.p
 yenc.py, headerdict.py, fifo.py, types.py, __init__.py. Also read: .github/workflows/*, tests/conftest.py,
 tests/helpers.py, tests/faults/{conftest,test_faults,README}.py, the harness half of tests/faults/scenarios.py
 (lines 2380-2725) and the xzver/yenc scenario tables, the header of tests/integration/inn2/test_inn2.py and setup.sh.
-One run on a test host (job 999, a test host) to confirm finding 1; the probe folder is removed.
+One run on a test host (job 999, 10.10.11.102) to confirm finding 1; the probe folder is removed.
 
 ## Findings (ordered by severity)
 

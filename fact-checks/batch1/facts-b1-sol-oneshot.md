@@ -12,7 +12,7 @@ Counting: the 41 supplied claim IDs, three additional substantive claims, and fi
 
 - **B**: files in the supplied base checkout.
 - **H182**, etc.: the corresponding head section of the attached `b1.patch`.
-- Report filenames below are under `upstream-gap/`.
+- Report filenames below are under `/claude/projects/pynntp/pynntp-tools/upstream-gap/`.
 - **Shown** means supported by source, reasoning, tests inspected, or an explicitly identified report—not that I independently ran tests.
 
 ## Claim ledger
@@ -38,7 +38,7 @@ Counting: the 41 supplied claim IDs, three additional substantive claims, and fi
 |---|---|---|
 | C1: original regex | **Shown** | B `nntp/yenc.py:27`. |
 | C2: quadratic retries on word runs without `=` | **Shown** | B `nntp/yenc.py:27,44–47`; successive starting positions retry successively shorter suffixes. `deepfix-review-opus.md:30–44` supplies the same argument. |
-| C3: approximately 45 seconds CPU for approximately 64 KB | **Shown, as a reported measurement** | `cross-project-patterns-2026-11-14.md:7` explicitly records this figure and test-host timing. `an internal review note:12` records the figure and smaller-run timings; `deepfix-review-opus.md:20` reports about 90 seconds for the two-run base timing test. Reachability through BODY/ARTICLE: B `nntp/nntp.py:1407–1413,1455–1459,1506,1562`. See measurement limitation below. |
+| C3: approximately 45 seconds CPU for approximately 64 KB | **Shown, as a reported measurement** | `cross-project-patterns-2026-11-14.md:7` explicitly records this figure and test-host timing. `CONFIDENTIAL-deepreview.md:12` records the figure and smaller-run timings; `deepfix-review-opus.md:20` reports about 90 seconds for the two-run base timing test. Reachability through BODY/ARTICLE: B `nntp/nntp.py:1407–1413,1455–1459,1506,1562`. See measurement limitation below. |
 | C4: trailer parsing has the same exposure | **Shown** | B `nntp/nntp.py:1458–1459`; `nntp/yenc.py:73–87` calls the same parser. |
 | C5: replacement pattern and linear complexity | **Shown** | H183 `nntp/yenc.py:27–29`. Interior positions fail the fixed-width lookbehind; each word run is scanned from its start rather than every suffix. |
 | C6: identical results for every input line | **Shown** | An earlier position in a word run reaches the same `=`; after a match, `\S*` consumes to whitespace/end. Thus a removed interior start could not have supplied an earlier match. Filename exclusion is unchanged. Detailed proof: `deepfix-review-opus.md:38–45`. |

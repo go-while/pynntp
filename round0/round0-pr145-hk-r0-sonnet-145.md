@@ -1,6 +1,6 @@
 # Round 0 review of pynntp #145 (hk-r0-sonnet-145, Sonnet 5.5, by reading only)
 
-Head 9b0db18, base 2bfca17. Nothing was built or run (G1). the rules hashes matched.
+Head 9b0db18, base 2bfca17. Nothing was built or run (G1). /etc/agents hashes matched.
 
 ## Findings (1)
 

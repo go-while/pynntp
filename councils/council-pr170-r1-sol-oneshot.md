@@ -1,4 +1,4 @@
-I’ll review the parser changes and tests by reading only. I can’t verify `the rules` hashes or ownership under the no-execution restriction; I won’t run code or connect to hosts.
+I’ll review the parser changes and tests by reading only. I can’t verify `/etc/agents` hashes or ownership under the no-execution restriction; I won’t run code or connect to hosts.
 ## Outcome
 
 **8/10 — two new regressions prevent reaching 9.5:** silent truncation of whitespace-encoded data and rejection of complete blocks followed by signatures and duplicate trailers.

@@ -12,6 +12,6 @@
 **Notes**
 - Confirmed by reading only; no commands or tests run. Reported test results are the lead’s, not independently verified.
 - The no-variable default retains its stock-group assertions.
-- The read-only restriction prevented the required `the rules` checksum/ownership command checks.
+- The read-only restriction prevented the required `/etc/agents` checksum/ownership command checks.
 
 #167 r2: 9.5, 0 findings (H/M/L): -

@@ -1,7 +1,7 @@
 # Council review: PR #174 follow-up e339eda (allow_msgid keyword-only)
 
 Reviewer: hk-council-opus-174k (Claude Opus). Read-only; nothing run (G1).
-Checkout: council-174k/checkout (HEAD e339eda).
+Checkout: /claude/projects/pynntp/pynntp-tools/council-174k/checkout (HEAD e339eda).
 Delta 9004229..e339eda: 2 files, 1 line each.
 
 ## Findings

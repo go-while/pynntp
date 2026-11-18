@@ -9,7 +9,7 @@ Head f8b978d (local branch pr-177), base upstream/main 2bfca17. Diff: pyproject.
   v0.17.4: ruff-check, then ruff-format), .github/workflows/check.yml (runs mypy and pytest,
   no ruff), and uv.lock (ruff 0.17.4, the same version as pre-commit). Grepped the repo for
   TODO/FIXME/XXX/HACK (none), print( (none) and noqa comments.
-- Ran ruff only, on test host a test host through the job queue (vm-run.sh jobs 307 and 308),
+- Ran ruff only, on test host 10.10.11.117 through jobq.sh (vm-run.sh jobs 307 and 308),
   using a scratch copy of pr-177 and ruff 0.17.4 from uv.lock:
   - head: `ruff check .` passes; `ruff format --check .` reports 31 files already formatted and
     no "may cause conflicts with the formatter" warning; `ruff check --select ISC001 --diff .`

@@ -10,7 +10,7 @@ None.
 - No other file mentions the Python used by test-inn2 (grep for "3.14"/"test-inn2" in *.md and tests/integration: only the matrix and a pyproject classifier for 3.14; the classifier list has no 3.15 and is not part of this change).
 - The job's `uv sync --locked` runs on 3.15 then; uv.lock resolves for requires-python, same as the matrix job's 3.15 leg.
 
-## Host results (a test host, Ubuntu 24.04, Python 3.12.3, job 262)
+## Host results (10.10.11.116, Ubuntu 24.04, Python 3.12.3, job 262)
 uv sync --locked ok; ruff check: All checks passed; ruff format --check: 31 files already formatted; mypy --strict .: no issues in 26 source files; pytest -q -p no:cacheprovider --ignore=tests/integration: 1034 passed. The change is a workflow line, so these only show that the tree is as green as base.
 
 ## Not checked

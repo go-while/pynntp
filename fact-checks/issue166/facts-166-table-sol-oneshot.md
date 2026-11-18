@@ -8,7 +8,7 @@ There’s also a timing counterexample to the header: #171 was marked ready at 1
 
 The header contradicts its own #153 row. That CI-only PR had one Sonnet review, scored 10/10—not Opus plus OpenAI.
 
-Evidence: `upstream-gap/review-pr153-hk-testprs.md:1–20`; `deep-fixes-status.md:57–59`. The other 22 PRs have paired Opus/OpenAI reports.
+Evidence: `/claude/projects/pynntp/pynntp-tools/upstream-gap/review-pr153-hk-testprs.md:1–20`; `deep-fixes-status.md:57–59`. The other 22 PRs have paired Opus/OpenAI reports.
 
 **Exact corrected wording:**
 > Each PR except #153 was reviewed by Claude Opus plus OpenAI Sol or Terra. #153, which changes CI only, had one Sonnet review.
@@ -18,7 +18,7 @@ Evidence: `upstream-gap/review-pr153-hk-testprs.md:1–20`; `deep-fixes-status.m
 #171 supplies a concrete counterexample:
 
 - GitHub’s live timeline records `ready_for_review` at **2026-11-17 16:08:06 UTC**.
-- The deep-review merge report identifies its overbroad bare-LF wording as a finding requiring correction: `deep-int1/deep-int1-merged-hk-deep-dedupe.md:95–125,338–339`.
+- The deep-review merge report identifies its overbroad bare-LF wording as a finding requiring correction: `/claude/projects/pynntp/pynntp-tools/deep-int1/deep-int1-merged-hk-deep-dedupe.md:95–125,338–339`.
 - Fix commits `d55abda` and `c337beb` are dated **20:47:21** and **20:48:10 UTC**, respectively—after readiness. Their commit messages explicitly identify the deep-review wording correction.
 
 **Exact corrected wording:**
@@ -35,7 +35,7 @@ Evidence: live `gh pr view` results; `review-pr153-hk-testprs.md:20`; `council-p
 
 ## T1–T3: every PR
 
-All report paths below are relative to `upstream-gap/`. Each wildcard identifies the paired reviewer reports.
+All report paths below are relative to `/claude/projects/pynntp/pynntp-tools/upstream-gap/`. Each wildcard identifies the paired reviewer reports.
 
 “Shown” in the Council column means both the table-to-PR-text comparison and the PR-text-to-report comparison passed, using the specified report-only exceptions.
 

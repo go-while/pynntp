@@ -1,7 +1,7 @@
 # Council review, PR #167 round 1, hk-council-opus-167
 
 Head fdd9408, base 2bfca17. Scope: tests/integration/inn2/test_inn2.py and
-CONTRIBUTING.md. Rules checked: the rules HASH.md matches (sha512sum -c OK).
+CONTRIBUTING.md. Rules checked: /etc/agents HASH.md matches (sha512sum -c OK).
 Method: I read the code only (diff, the full head test file, nntp/nntp.py login, _command,
 _connect, compress, from_url, CI workflow, setup.sh). I ran nothing, so this
 review makes no claim that tests pass.

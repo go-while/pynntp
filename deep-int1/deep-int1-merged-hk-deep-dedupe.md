@@ -8,8 +8,8 @@ and the "Low impact, not fixed" / "Noted, not fixed yet" lists in
 drafts/issue-166.template.md (called "#166 list" below).
 
 Run: one test file, 10 probes (9 of them x3 recv chunk sizes = 28 cases), on a
-test host via vm-run.sh (job 1003, a test host), copy of the head in
-worktree:hk-deep-dedupe (removed after): **28 passed**, i.e. every
+test host via vm-run.sh (job 1003, 10.10.11.119), copy of the head in
+/claude/trees/pynntp/hk-deep-dedupe (removed after): **28 passed**, i.e. every
 behaviour marked "run" below reproduces at e07f041. Nothing ran on this machine.
 
 ## Raw findings (all four)

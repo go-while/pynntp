@@ -1,4 +1,4 @@
-I’ll keep this review read-only. I can’t verify the `the rules` hashes or ownership with the permitted tools; I won’t run any commands or tests.
+I’ll keep this review read-only. I can’t verify the `/etc/agents` hashes or ownership with the permitted tools; I won’t run any commands or tests.
 **All three round-1 findings are fixed.**
 
 1. **Whitespace data — fixed.** `nntp/nntp.py:1500` treats spaces as dropped data; the supplied input raises `NNTPYEncError`. Regression test: `tests/test_articles.py:185`.
