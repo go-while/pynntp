@@ -203,16 +203,18 @@ def _stray_yend_error(
     return "=yend after data outside a block"
 
 
-def _item_lines(item: bytes) -> Iterator[bytes]:
-    """Split one item of a body iterable into lines.
+def _body_lines(items: Iterable[bytes]) -> Iterator[bytes]:
+    """Split body items at interior line feeds.
 
     An item may hold several LF-terminated lines. An empty item is one empty
     line, and an item without LF ends its line at its end.
     """
-    if item:
-        yield from io.BytesIO(item)
-    else:
-        yield item
+    for item in items:
+        if item.find(b"\n", 0, -1) < 0:
+            # A file iterator already yields complete lines, including any LF.
+            yield item
+        else:
+            yield from io.BytesIO(item)
 
 
 def _inflate(inflate: _Decompress, data: bytes) -> bytes:
@@ -2131,7 +2133,7 @@ class NNTPClient(BaseNNTPClient):
         if isinstance(body, bytes):
             lines: Iterable[bytes] = io.BytesIO(body)
         else:
-            lines = itertools.chain.from_iterable(map(_item_lines, body))
+            lines = _body_lines(body)
 
         with tempfile.SpooledTemporaryFile(max_size=_SPOOL_SIZE) as article:
             article.write(hdrs.encode(self.encoding, self.errors))
