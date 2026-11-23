@@ -30,6 +30,8 @@ from .types import Newsgroup, Range
 _HEADER_NAME_RE = re.compile(r"[!-9;-~]+")
 # A folded header value continues after a line break followed by whitespace.
 _HEADER_FOLD_RE = re.compile(r"\r?\n(?=[ \t])")
+# RFC 3977 section 3.6: 1-248 printable US-ASCII characters except ">".
+_MESSAGE_ID_RE = re.compile(r"<[!-=?-~]{1,248}>")
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
@@ -51,6 +53,8 @@ def unparse_range(obj: Range) -> str:
         return str(obj)
 
     if isinstance(obj, tuple):
+        if any(isinstance(bound, bool) for bound in obj):
+            raise ValueError("Invalid range format")
         if len(obj) == 1:
             return f"{obj[0]}-"
         if len(obj) == 2:
@@ -70,9 +74,13 @@ def unparse_msgid_range(obj: str | Range) -> str:
         The message-id unchanged, or the formatted range.
 
     Raises:
-        ValueError: If obj is not a valid range.
+        ValueError: If obj is not a valid range, or is an empty or blank
+            message-id. An empty argument would be dropped from the command,
+            which then acts on the current article.
     """
     if isinstance(obj, str):
+        if not obj.strip():
+            raise ValueError(f"Invalid message-id or article range: {obj!r}")
         return obj
 
     return unparse_range(obj)
@@ -153,20 +161,25 @@ def parse_overview_fmt(line: str) -> tuple[str, bool]:
     name, suffix = line.rstrip().split(":")
     if suffix and not name:  # Metadata such as ":bytes"
         name, suffix = suffix, name
+    if not _HEADER_NAME_RE.fullmatch(name):
+        raise ValueError(f"invalid overview field name {name!r}")
     full = suffix.lower() == "full"  # ABNF strings ignore case
     if suffix and not full:
         raise ValueError(f"unknown suffix {suffix!r}")
     return name, full
 
 
-def parse_number_value(line: str) -> tuple[int, str]:
+def parse_number_value(line: str, *, allow_msgid: bool = True) -> tuple[int, str]:
     """Parse an HDR, XHDR or XPAT line: an article number, then a value.
 
     A line starting with a message-id (older XHDR by message-id) gets
-    number 0, as HDR gives.
+    number 0, as HDR gives. Only a request by message-id may be answered
+    with such a line.
 
     Args:
         line: The response line.
+        allow_msgid: False if the request was not by message-id (a range or
+            the current article), so a message-id line is an error.
 
     Returns:
         The article number and the value ("" if there is none).
@@ -175,14 +188,22 @@ def parse_number_value(line: str) -> tuple[int, str]:
         ValueError: If the line cannot be parsed.
     """
     first, *value = line.rstrip("\r\n").split(None, 1)
-    number = 0 if first.startswith("<") else int(first)
+    if _MESSAGE_ID_RE.fullmatch(first):
+        if not allow_msgid:
+            raise ValueError(f"message-id {first!r} in the reply to a numeric request")
+        number = 0
+    elif first.isascii() and first.isdecimal():
+        number = int(first)
+    else:
+        raise ValueError(f"invalid article number or message-id: {first!r}")
     return number, value[0] if value else ""
 
 
 def parse_headers(obj: str | Iterable[str]) -> HeaderDict:
     """Parse header lines up to the first blank line.
 
-    Continuation lines are unfolded. CRLF and LF line endings are accepted.
+    Continuation lines are unfolded without changing internal whitespace.
+    CRLF and LF line endings are accepted; whole values are trimmed.
 
     Args:
         obj: A string, or an iterable of lines such as a file.
@@ -196,23 +217,25 @@ def parse_headers(obj: str | Iterable[str]) -> HeaderDict:
     """
     if isinstance(obj, str):
         obj = StringIO(obj)
-    hdrs: list[tuple[str, str]] = []
+    # Each header keeps its value pieces in a list, joined once at the end:
+    # joining on every continuation line is quadratic in the number of lines.
+    hdrs: list[tuple[str, list[str]]] = []
     for line in obj:
+        line = line.rstrip("\r\n")
         # A blank line (CRLF or LF) ends the headers.
-        if not line.rstrip("\r\n"):
+        if not line:
             break
         # A line starting with whitespace continues the previous header.
         if line[0] in " \t":
             if not hdrs:
                 raise ValueError("First header is a continuation")
-            name, value = hdrs[-1]
-            hdrs[-1] = name, value + line.rstrip()
+            hdrs[-1][1].append(line)
             continue
         name, sep, value = line.partition(":")
         if not sep:
             raise ValueError(f"Invalid header line: {line!r}")
-        hdrs.append((name.strip(), value.strip()))
-    return HeaderDict(hdrs)
+        hdrs.append((name.strip(), [value]))
+    return HeaderDict((name, "".join(pieces).strip()) for name, pieces in hdrs)
 
 
 def unparse_headers(hdrs: Mapping[str, str]) -> str:
