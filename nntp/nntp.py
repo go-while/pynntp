@@ -290,6 +290,10 @@ class NNTPDataError(NNTPError):
     """The content of a response could not be parsed or failed a check."""
 
 
+class _DrainedResponseError(Exception):
+    """A data error discovered after the complete response was consumed."""
+
+
 class NNTPYEncError(NNTPDataError):
     """yEnc data failed its size or CRC check.
 
@@ -659,17 +663,17 @@ class BaseNNTPClient:
             raise NNTPDataError("Missing yEnc trailer")
         if mismatch := check_trailer(trailer, size, decoder.crc32, part=False):
             raise NNTPDataError(f"Bad yEnc data: {mismatch}")
-        if second_block:
-            raise NNTPDataError("Bad yEnc data: second =ybegin after the trailer")
         if not inflate.eof:
             raise NNTPDataError("Decompression failed: compressed data is truncated")
-        # A finished stream may end without CRLF; do not lose its last row.
-        # An unterminated tail that holds a bare LF (a row or rows ended by LF,
-        # not CRLF) is refused. An LF row followed by a CRLF row is read as one
-        # row, as in 3.3.0.
-        if last := buf.read():
-            if b"\n" in last:
-                raise NNTPDataError("Bad XZ data: line ends without CRLF")
+        # An unterminated final XZ row may omit CRLF, but cannot contain a bare LF.
+        last = buf.read()
+        if b"\n" in last:
+            raise NNTPDataError("Bad XZ data: line ends without CRLF")
+        if second_block:
+            raise _DrainedResponseError(
+                "Bad yEnc data: second =ybegin after the trailer"
+            )
+        if last:
             yield last
 
     def _info(self, code: int, message: str, yz: bool = False) -> Iterator[bytes]:
@@ -710,6 +714,9 @@ class BaseNNTPClient:
                     break
                 yield line
             complete = True
+        except _DrainedResponseError as e:
+            complete = True
+            raise NNTPDataError(str(e)) from None
         finally:
             # An iterator abandoned before reconnect() must not touch the new
             # connection when it is finally closed
