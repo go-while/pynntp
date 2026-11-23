@@ -177,11 +177,14 @@ def test_xzver_lf_only_rows(connect: Connect, payload: bytes) -> None:
         list(client.xzver((1, 2)))
 
 
-def test_xzhdr_lf_only_rows(connect: Connect) -> None:
-    server = yenczlib(b"221", b"1 hello\n2 world\n") + DATE
+@pytest.mark.parametrize("after", [b"", SECOND_BLOCK])
+def test_xzhdr_lf_only_rows(connect: Connect, after: bytes) -> None:
+    server = yenczlib(b"221", b"1 hello\n2 world\n", after=after) + DATE
     client, _ = connect(WELCOME + MODE_READER + server)
     with pytest.raises(nntp.NNTPDataError, match="without CRLF"):
         list(client.xzhdr("Subject", (1, 2)))
+    with pytest.raises(nntp.NNTPSyncError):
+        client.date()
 
 
 def test_xzver_empty_compressed_stream(connect: Connect) -> None:
